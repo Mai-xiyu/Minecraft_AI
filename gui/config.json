@@ -1,0 +1,17 @@
+{
+  "minecraft": {
+    "host": "localhost",
+    "port": 25562,
+    "username": "AI_Player",
+    "version": "1.21.1",
+    "viewDistance": "tiny",
+    "chatLengthLimit": 100,
+    "autoReconnect": true,
+    "reconnectDelay": 5000
+  },
+  "ai": {
+    "api_key": "sk-cace6813eab14321a8b96f228dda52b0",
+    "steps": 100,
+    "delay": 2
+  }
+}
