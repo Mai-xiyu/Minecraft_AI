@@ -13,65 +13,128 @@ async function moveToPosition(bot, x, y, z) {
     movements.allow1by1towers = true;
     movements.allowFreeMotion = true;
     
+    // 设置机器人的movements
     bot.pathfinder.setMovements(movements);
-    const goal = new GoalNear(x, y, z, 1); // 移动到距离目标1格内
     
-    return new Promise((resolve, reject) => {
-        bot.pathfinder.setGoal(goal);
-        
-        // 设置超时
-        const timeout = setTimeout(() => {
-            bot.pathfinder.setGoal(null);
-            reject(new Error('移动超时'));
-        }, 30000); // 30秒超时
-        
-        // 检查是否到达
-        const checkInterval = setInterval(() => {
-            if (bot.entity.position.distanceTo(position) < 2) {
-                clearInterval(checkInterval);
-                clearTimeout(timeout);
-                bot.pathfinder.setGoal(null);
-                resolve();
-            }
-        }, 1000);
-        
-        // 处理路径错误
-        bot.pathfinder.once('goal_failed', () => {
-            clearInterval(checkInterval);
-            clearTimeout(timeout);
-            reject(new Error('无法找到路径'));
+    // 计算目标位置的距离
+    const currentPosition = bot.entity.position;
+    const distance = currentPosition.distanceTo(position);
+    
+    // 设置超时时间，根据距离动态调整
+    // 每格方块大约需要0.5秒，再加上10秒的基础时间
+    const timeoutMs = Math.max(20000, distance * 500 + 10000);
+    
+    console.log(`移动到 (${x}, ${y}, ${z})，距离: ${distance.toFixed(2)}，超时: ${timeoutMs/1000}秒`);
+    
+    try {
+        // 创建一个超时Promise
+        const timeout = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('移动超时')), timeoutMs);
         });
-    });
+        
+        // 创建移动Promise
+        const movement = new Promise(async (resolve) => {
+            // 设置寻路目标
+            const goal = new GoalNear(x, y, z, 1);
+            await bot.pathfinder.goto(goal);
+            resolve();
+        });
+        
+        // 使用Promise.race来实现超时
+        await Promise.race([movement, timeout]);
+        
+        return {
+            success: true,
+            message: `已移动到 (${x}, ${y}, ${z})附近`,
+            position: bot.entity.position
+        };
+    } catch (err) {
+        console.error('移动失败:', err.message);
+        return {
+            success: false,
+            error: err.message,
+            position: bot.entity.position
+        };
+    }
 }
 
-// 收集指定类型的方块
-async function collectBlock(bot, blockType, count = 1) {
-    const mcData = require('minecraft-data')(bot.version);
-    const blockId = mcData.blocksByName[blockType]?.id;
-    
-    if (!blockId) {
-        throw new Error(`未知方块类型: ${blockType}`);
+// 添加检查插件是否加载的函数
+function ensurePluginsLoaded(bot) {
+    // 检查pathfinder插件
+    if (!bot.pathfinder) {
+        throw new Error('pathfinder插件未加载');
     }
     
-    let collected = 0;
-    while (collected < count) {
-        // 寻找最近的目标方块
-        const block = bot.findBlock({
-            matching: blockId,
-            maxDistance: 32
-        });
-        
-        if (!block) {
-            throw new Error(`找不到更多的 ${blockType}`);
-        }
-        
+    // 检查collectBlock插件
+    if (!bot.collectBlock) {
+        // 尝试加载插件
         try {
-            await bot.collectBlock.collect(block);
-            collected++;
-            console.log(`已收集 ${collected}/${count} 个 ${blockType}`);
-        } catch (err) {
-            throw new Error(`收集 ${blockType} 失败: ${err.message}`);
+            const collectBlock = require('mineflayer-collectblock').plugin;
+            bot.loadPlugin(collectBlock);
+            console.log('动态加载了collectBlock插件');
+        } catch (e) {
+            throw new Error('collectBlock插件未加载且无法动态加载: ' + e.message);
         }
+    }
+}
+
+// 修改收集方法
+async function collect(bot, action) {
+    // 首先检查插件是否加载
+    ensurePluginsLoaded(bot);
+    
+    const blockName = action.blockType;
+    if (!blockName) {
+        throw new Error('未指定要收集的方块类型');
+    }
+    
+    const mcData = require('minecraft-data')(bot.version);
+    const blockType = mcData.blocksByName[blockName];
+    
+    if (!blockType) {
+        throw new Error(`未知的方块类型: ${blockName}`);
+    }
+    
+    console.log(`搜索附近的 ${blockName}...`);
+    
+    // 查找范围
+    const searchRadius = action.radius || 32;
+    
+    // 尝试查找指定方块
+    const blockPosition = bot.findBlock({
+        matching: blockType.id,
+        maxDistance: searchRadius
+    });
+    
+    if (!blockPosition) {
+        return {
+            success: false,
+            error: `找不到附近的 ${blockName}`
+        };
+    }
+    
+    console.log(`找到 ${blockName} 位于 ${blockPosition.position.toString()}`);
+    
+    try {
+        // 确保collectBlock可用
+        if (!bot.collectBlock || typeof bot.collectBlock.collect !== 'function') {
+            throw new Error('collectBlock插件未正确初始化');
+        }
+        
+        // 收集方块
+        await bot.collectBlock.collect(blockPosition);
+        console.log(`成功收集了 ${blockName}`);
+        
+        return {
+            success: true,
+            message: `成功收集了 ${blockName}`
+        };
+    } catch (e) {
+        console.error(`收集 ${blockName} 失败:`, e);
+        return {
+            success: false,
+            error: `收集失败: ${e.message}`
+        };
     }
 }
 
@@ -168,9 +231,10 @@ async function lookAt(bot, x, y, z) {
     await bot.lookAt(position);
 }
 
+// 确保所有函数正确导出
 module.exports = {
     moveToPosition,
-    collectBlock,
+    collect,           // 确保这是正确名称
     placeBlock,
     digBlock,
     attackEntity,

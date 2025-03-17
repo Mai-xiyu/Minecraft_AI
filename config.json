@@ -14,7 +14,7 @@
     "api_key": "",
     "initial_task": "2. \u6536\u96c6\u8d44\u6e90",
     "steps": 100,
-    "delay": 2,
+    "delay": 1,
     "temperature": 0.7,
     "max_tokens": 4096,
     "memory_capacity": 20,
@@ -23,5 +23,9 @@
   "server": {
     "host": "localhost",
     "port": 3002
+  },
+  "vision": {
+    "use_vision": true,
+    "vision_model": "ResNet18"
   }
 }

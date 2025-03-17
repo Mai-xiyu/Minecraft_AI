@@ -168,3 +168,31 @@ class LearningSystem:
             prompt += f"- {action_type}: {success_rate*100:.1f}%\n"
         
         return prompt 
+    
+    def learn_from_player_chat(self, username, message, state):
+        """从玩家聊天消息中学习"""
+        # 提取关键词和指令
+        important_keywords = [
+            "collect", "craft", "build", "dig", "move", "go", 
+            "make", "use", "get", "place", "wood", "stone", 
+            "iron", "diamond", "食物", "武器", "工具"
+        ]
+        
+        # 检查消息是否包含关键词
+        has_keywords = any(keyword in message.lower() for keyword in important_keywords)
+        
+        if has_keywords:
+            # 保存为指导记忆
+            self.task_knowledge.setdefault("player_guidance", []).append({
+                "username": username,
+                "message": message,
+                "state": state,
+                "timestamp": time.time()
+            })
+            
+            # 限制大小
+            if len(self.task_knowledge["player_guidance"]) > 20:
+                self.task_knowledge["player_guidance"].pop(0)
+            
+            return True
+        return False 

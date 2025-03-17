@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                            QPushButton, QTextEdit, QLabel, QSpinBox, QLineEdit,
-                           QGroupBox, QFormLayout, QTabWidget, QComboBox, QCheckBox, QDoubleSpinBox)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer
+                           QGroupBox, QFormLayout, QTabWidget, QComboBox, QCheckBox, QDoubleSpinBox, QMessageBox)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QMetaObject, Q_ARG
 import logging
 import json
 import sys
@@ -12,6 +12,10 @@ import os
 import subprocess
 import requests
 from requests.exceptions import RequestException
+import threading
+
+# 添加版本号常量
+VERSION = "1.2.0-By Mai-xiyu"
 
 class LogHandler(logging.Handler):
     """自定义日志处理器，将日志发送到GUI"""
@@ -35,8 +39,30 @@ class ConnectionThread(QThread):
         self.attempts = attempts
 
     def run(self):
-        from test_connection import test_connection
         try:
+            # 尝试导入 test_connection
+            try:
+                from test_connection import test_connection
+            except ImportError:
+                # 如果导入失败，创建一个简单的内部测试函数
+                def test_connection(url, attempts):
+                    self.status_signal.emit(f"尝试连接到 {url}...")
+                    try:
+                        import requests
+                        for i in range(attempts):
+                            try:
+                                response = requests.get(url, timeout=2)
+                                if response.status_code == 200:
+                                    return True
+                            except Exception:
+                                pass
+                            if i < attempts - 1:
+                                time.sleep(1)
+                        return False
+                    except ImportError:
+                        self.status_signal.emit("错误：未安装requests库")
+                        return False
+            
             result = test_connection(self.url, self.attempts)
             self.finished_signal.emit(result)
         except Exception as e:
@@ -46,6 +72,8 @@ class ConnectionThread(QThread):
 class AIThread(QThread):
     """AI运行线程"""
     log_signal = pyqtSignal(str)
+    update_signal = pyqtSignal(dict)  # 添加状态更新信号
+    finished = pyqtSignal()  # 添加完成信号
     
     def __init__(self, agent, steps, delay):
         super().__init__()
@@ -56,13 +84,34 @@ class AIThread(QThread):
     
     def run(self):
         try:
-            for _ in range(self.steps):
+            for i in range(self.steps):
                 if not self.running:
                     break
-                self.agent.step()
+                    
+                # 执行一步并获取结果
+                result = self.agent.step()
+                
+                # 发送日志消息
+                self.log_signal.emit(f"执行步骤 {i+1}/{self.steps}")
+                
+                # 同时发送结构化状态更新
+                self.update_signal.emit({
+                    'status': True,
+                    'step': i+1,
+                    'total': self.steps,
+                    'result': result
+                })
+                
                 time.sleep(self.delay)
+                
+            # 完成后发送信号
+            self.finished.emit()
         except Exception as e:
-            self.log_signal.emit(f"AI执行错误: {e}")
+            error_msg = f"AI执行错误: {e}"
+            self.log_signal.emit(error_msg)
+            # 发送错误状态
+            self.update_signal.emit({'status': False, 'error': str(e)})
+            self.finished.emit()
     
     def terminate(self):
         self.running = False
@@ -73,7 +122,8 @@ class MainWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Minecraft AI 控制面板")
+        # 修改标题，添加版本号
+        self.setWindowTitle(f"Minecraft AI 控制面板 v{VERSION}")
         self.setMinimumSize(800, 600)
         
         # 创建主布局
@@ -110,6 +160,9 @@ class MainWindow(QMainWindow):
         
         # 加载配置
         self.load_config()
+        
+        # 加载自定义任务
+        self.load_custom_tasks()
 
     def setup_control_panel(self, layout):
         # 状态组
@@ -146,6 +199,11 @@ class MainWindow(QMainWindow):
         self.sync_config_button.clicked.connect(self.sync_config_to_bot)
         button_layout.addWidget(self.sync_config_button)
         
+        # 添加模型下载按钮
+        self.download_models_button = QPushButton("下载视觉模型")
+        self.download_models_button.clicked.connect(self.download_vision_models)
+        button_layout.addWidget(self.download_models_button)
+        
         layout.addLayout(button_layout)
         
         # 日志显示
@@ -158,6 +216,30 @@ class MainWindow(QMainWindow):
         
         log_group.setLayout(log_layout)
         layout.addWidget(log_group)
+        
+        # 添加聊天组
+        chat_group = QGroupBox("聊天")
+        chat_layout = QVBoxLayout()
+        
+        # 聊天显示区域
+        self.chat_display = QTextEdit()
+        self.chat_display.setReadOnly(True)
+        chat_layout.addWidget(self.chat_display)
+        
+        # 聊天输入区域
+        chat_input_layout = QHBoxLayout()
+        self.chat_input = QLineEdit()
+        self.chat_input.setPlaceholderText("输入消息...")
+        self.chat_input.returnPressed.connect(self.send_chat)
+        chat_input_layout.addWidget(self.chat_input)
+        
+        send_button = QPushButton("发送")
+        send_button.clicked.connect(self.send_chat)
+        chat_input_layout.addWidget(send_button)
+        
+        chat_layout.addLayout(chat_input_layout)
+        chat_group.setLayout(chat_layout)
+        layout.addWidget(chat_group)
 
     def setup_config_panel(self, layout):
         # Minecraft配置
@@ -232,7 +314,9 @@ class MainWindow(QMainWindow):
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         ai_layout.addRow("API密钥:", self.api_key_input)
         
-        # 添加任务选择
+        # 添加任务选择和保存组合
+        task_layout = QHBoxLayout()
+        
         self.task_input = QComboBox()
         tasks = [
             "1. 探索世界",
@@ -246,7 +330,18 @@ class MainWindow(QMainWindow):
         ]
         self.task_input.addItems(tasks)
         self.task_input.setCurrentText("3. 建造房屋")  # 默认任务
-        ai_layout.addRow("初始任务:", self.task_input)
+        self.task_input.setEditable(True)  # 设置为可编辑
+        self.task_input.setInsertPolicy(QComboBox.InsertPolicy.InsertAtBottom)  # 新输入项添加到底部
+        task_layout.addWidget(self.task_input)
+        
+        # 添加保存任务按钮
+        save_task_btn = QPushButton("保存")
+        save_task_btn.setToolTip("保存当前任务到预设列表")
+        save_task_btn.clicked.connect(self.save_custom_task)
+        save_task_btn.setMaximumWidth(60)
+        task_layout.addWidget(save_task_btn)
+        
+        ai_layout.addRow("初始任务:", task_layout)
         
         self.steps_input = QSpinBox()
         self.steps_input.setRange(1, 1000)
@@ -271,8 +366,56 @@ class MainWindow(QMainWindow):
         self.max_tokens_input.setValue(2048)
         ai_layout.addRow("最大令牌数:", self.max_tokens_input)
         
+        # 添加复选框选项在一个组中
+        options_group = QGroupBox("AI选项")
+        options_layout = QVBoxLayout()
+        options_group.setLayout(options_layout)
+
+        # 创建选项布局
+        options_layout = QHBoxLayout()
+
+        # 添加各种选项复选框
+        self.use_local_model = QCheckBox("使用本地模型")
+        options_layout.addWidget(self.use_local_model)
+
+        self.use_cache = QCheckBox("启用缓存")
+        self.use_cache.setChecked(True)  # 默认启用
+        options_layout.addWidget(self.use_cache)
+
+        self.use_prediction = QCheckBox("启用预测")
+        self.use_prediction.setChecked(True)  # 默认启用
+        options_layout.addWidget(self.use_prediction)
+
+        self.use_vision = QCheckBox("启用视觉")
+        self.use_vision.setChecked(True)  # 默认启用
+        options_layout.addWidget(self.use_vision)
+
+        # 将选项布局添加到主布局
+        ai_layout.addRow("AI选项:", options_layout)
+        
         ai_group.setLayout(ai_layout)
         layout.addWidget(ai_group)
+        
+        # 修改视觉系统配置组
+        vision_group = QGroupBox("视觉系统")
+        vision_layout = QFormLayout()
+        
+        self.use_vision = QCheckBox()
+        self.use_vision.setChecked(False)
+        vision_layout.addRow("启用视觉:", self.use_vision)
+        
+        # 替换简单的模型选择为包含详细信息的选择
+        self.vision_model = QComboBox()
+        # 清除现有项目
+        self.vision_model.clear()
+        # 添加带详细信息的项目
+        self.vision_model.addItem("ResNet18 (18M参数|44MB|适合GPU)", "ResNet18")
+        self.vision_model.addItem("MobileNet (4M参数|14MB|手机/CPU)", "MobileNet")
+        self.vision_model.addItem("自定义模型 (可导入专业模型)", "自定义")
+        vision_layout.addRow("视觉模型:", self.vision_model)
+        
+        vision_group.setLayout(vision_layout)
+        layout.addWidget(vision_group)
         
         # 保存按钮
         save_button = QPushButton("保存配置")
@@ -329,6 +472,17 @@ class MainWindow(QMainWindow):
                 self.temperature_input.setValue(ai_config.get("temperature", 0.7))
                 self.max_tokens_input.setValue(ai_config.get("max_tokens", 2048))
                 
+                # 加载视觉系统配置
+                vision_config = config.get("vision", {})
+                self.use_vision.setChecked(vision_config.get("use_vision", False))
+                
+                # 根据保存的模型值选择正确的项目
+                model_value = vision_config.get("vision_model", "ResNet18")
+                for i in range(self.vision_model.count()):
+                    if self.vision_model.itemData(i) == model_value:
+                        self.vision_model.setCurrentIndex(i)
+                        break
+                
                 logging.info("配置已加载")
             else:
                 # 如果配置文件不存在，创建默认配置并保存
@@ -367,6 +521,10 @@ class MainWindow(QMainWindow):
                 "server": {
                     "host": self.server_host_input.text(),
                     "port": self.server_port_input.value()
+                },
+                "vision": {
+                    "use_vision": self.use_vision.isChecked(),
+                    "vision_model": self.vision_model.currentData(),  # 使用数据值而不是显示文本
                 }
             }
             
@@ -400,6 +558,23 @@ class MainWindow(QMainWindow):
         self.test_conn_button.setEnabled(True)
         self.status_label.setText("已连接" if success else "连接失败")
 
+    def check_server_connection(self, max_retries=3):
+        """检查服务器连接状态"""
+        server_url = self.get_server_url()
+        
+        for i in range(max_retries):
+            try:
+                response = requests.get(f"{server_url}/bot/status", timeout=10)
+                if response.status_code == 200:
+                    return True
+                
+                time.sleep(1)  # 失败后等待1秒再重试
+            except Exception as e:
+                logging.warning(f"连接服务器失败 (尝试 {i+1}/{max_retries}): {e}")
+                time.sleep(2)  # 失败后等待2秒再重试
+            
+        return False
+
     def start_ai(self):
         try:
             # 1. 保存最新配置
@@ -431,7 +606,8 @@ class MainWindow(QMainWindow):
             # 创建AI运行线程
             self.ai_thread = AIThread(self.agent, self.steps_input.value(), self.delay_input.value())
             self.ai_thread.log_signal.connect(lambda msg: logging.info(msg))
-            self.ai_thread.finished.connect(self.on_ai_finished)
+            self.ai_thread.update_signal.connect(self.update_status)  # 连接update_signal到update_status方法
+            self.ai_thread.finished.connect(self.on_ai_finished)  # 连接完成信号
             self.ai_thread.start()
             
             logging.info("AI已启动")
@@ -505,6 +681,10 @@ class MainWindow(QMainWindow):
             else:
                 self._finish_stopping()
                 
+            # 停止聊天更新
+            if hasattr(self, 'chat_timer'):
+                self.chat_timer.stop()
+                
         except Exception as e:
             logging.error(f"停止AI失败: {e}")
             self._finish_stopping()
@@ -526,8 +706,17 @@ class MainWindow(QMainWindow):
         logging.info("AI已停止")
 
     def on_ai_finished(self):
-        """AI运行完成的回调"""
-        self.stop_ai()
+        """AI线程完成时调用"""
+        try:
+            # 恢复界面状态
+            self.start_button.setEnabled(True)
+            self.stop_button.setEnabled(False)
+            self.status_label.setText("状态: 已停止")
+            
+            # 记录日志
+            logging.info("AI已完成运行")
+        except Exception as e:
+            logging.error(f"处理AI完成事件时出错: {e}")
 
     def sync_config_to_bot(self):
         """同步配置到机器人服务器"""
@@ -569,8 +758,162 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logging.error(str(e))
             # 可以在这里添加错误提示对话框
-            from PyQt6.QtWidgets import QMessageBox
             QMessageBox.critical(self, "错误", str(e))
+
+    def save_custom_task(self):
+        custom_task = self.task_input.currentText()
+        
+        # 检查是否已存在
+        found = False
+        for i in range(self.task_input.count()):
+            if self.task_input.itemText(i) == custom_task:
+                found = True
+                break
+        
+        # 如果不存在，添加到列表
+        if not found and custom_task.strip():
+            self.task_input.addItem(custom_task)
+            
+            # 保存到本地文件
+            try:
+                tasks_file = "custom_tasks.txt"
+                with open(tasks_file, "a+", encoding="utf-8") as f:
+                    f.seek(0)  # 先定位到文件开头
+                    existing_tasks = f.read().splitlines()
+                    if custom_task not in existing_tasks:
+                        f.write(f"{custom_task}\n")
+                logging.info(f"自定义任务已保存: {custom_task}")
+            except Exception as e:
+                logging.error(f"保存自定义任务失败: {e}")
+
+    def load_custom_tasks(self):
+        try:
+            tasks_file = "custom_tasks.txt"
+            if os.path.exists(tasks_file):
+                with open(tasks_file, "r", encoding="utf-8") as f:
+                    custom_tasks = f.read().splitlines()
+                    for task in custom_tasks:
+                        if task.strip() and not any(task == self.task_input.itemText(i) for i in range(self.task_input.count())):
+                            self.task_input.addItem(task)
+        except Exception as e:
+            logging.error(f"加载自定义任务失败: {e}")
+
+    def send_chat(self):
+        message = self.chat_input.text().strip()
+        if not message:
+            return
+        
+        # 清除输入框
+        self.chat_input.clear()
+        
+        # 显示消息到聊天窗口
+        self.chat_display.append(f"<b>你:</b> {message}")
+        
+        # 发送到机器人
+        try:
+            server_url = self.get_server_url()
+            response = requests.post(
+                f"{server_url}/bot/chat",
+                json={"message": message},
+                timeout=5
+            )
+            
+            if response.status_code != 200:
+                self.chat_display.append("<span style='color:red'>发送失败</span>")
+        except Exception as e:
+            logging.error(f"发送聊天消息失败: {e}")
+            self.chat_display.append("<span style='color:red'>发送失败: 网络错误</span>")
+
+    def update_chat(self):
+        try:
+            server_url = self.get_server_url()
+            response = requests.get(
+                f"{server_url}/bot/chat/history",
+                timeout=2
+            )
+            
+            if response.status_code == 200:
+                messages = response.json()
+                
+                # 只显示新消息
+                if not hasattr(self, 'last_message_id'):
+                    self.last_message_id = 0
+                    
+                for msg in messages:
+                    if msg['id'] > self.last_message_id:
+                        if msg['source'] == 'player':
+                            # 玩家消息已由send_chat方法添加
+                            pass
+                        else:
+                            # AI或其他玩家的消息
+                            self.chat_display.append(f"<b>{msg['username']}:</b> {msg['message']}")
+                        self.last_message_id = msg['id']
+        except Exception as e:
+            pass  # 静默失败，避免频繁错误消息
+
+    def update_status(self, step_count, status, error=None):
+        """更新AI状态显示"""
+        self.step_label.setText(f"步骤: {step_count}")
+        self.status_label.setText(f"状态: {status}")
+        
+        # 如果有任务队列，显示它们
+        if hasattr(self.ai_thread, 'task_queue') and self.ai_thread.task_queue:
+            task_count = len(self.ai_thread.task_queue)
+            
+            # 获取当前执行的任务信息
+            current_task = "未知任务"
+            if hasattr(self.ai_thread, 'current_plan'):
+                current_task = self.ai_thread.current_plan
+            
+            # 创建任务队列信息
+            task_queue_text = f"\n执行计划: {current_task}\n"
+            task_queue_text += f"剩余任务: {task_count}\n"
+            
+            for i, task in enumerate(self.ai_thread.task_queue[:3]):  # 只显示前3个任务
+                desc = task.get('description', f"任务 {i+1}")
+                action = task.get('action', 'unknown')
+                task_queue_text += f"- {desc} ({action})\n"
+            
+            if task_count > 3:
+                task_queue_text += f"... 还有 {task_count-3} 个任务\n"
+            
+            self.log_text.append(task_queue_text)
+        
+        if error:
+            self.error_label.setText(f"错误: {error}")
+            self.error_label.setStyleSheet("color: red;")
+        else:
+            self.error_label.setText("")
+
+    def download_vision_models(self):
+        """手动下载视觉模型"""
+        self.log_text.append("开始下载视觉模型...")
+        self.download_models_button.setEnabled(False)
+        
+        # 创建后台线程下载模型
+        download_thread = threading.Thread(target=self._download_models_thread)
+        download_thread.daemon = True
+        download_thread.start()
+
+    def _download_models_thread(self):
+        """后台下载模型的线程"""
+        try:
+            from ai.vision_learning import VisionLearningSystem
+            system = VisionLearningSystem()
+            
+            # 强制下载所有模型
+            for model_name in system.MODEL_CONFIGS:
+                self.log_text.append(f"下载模型: {model_name}")
+                local_path = system._download_model(model_name)
+                self.log_text.append(f"模型已保存到: {local_path}")
+            
+            self.log_text.append("所有视觉模型下载完成!")
+        except Exception as e:
+            self.log_text.append(f"下载模型时出错: {e}")
+        finally:
+            # 修复连接类型
+            QMetaObject.invokeMethod(self.download_models_button, "setEnabled", 
+                                   Qt.ConnectionType.QueuedConnection, Q_ARG(bool, True))
 
 # 修改OutputReader类，添加启动完成信号
 class OutputReader(QObject):

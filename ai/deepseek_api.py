@@ -5,6 +5,7 @@ from openai import OpenAI
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
+import logging
 
 class DeepSeekAPI:
     """DeepSeek API接口"""
@@ -136,4 +137,55 @@ class DeepSeekAPI:
     
     def clear_history(self):
         """清除对话历史"""
-        self.conversation_history = [] 
+        self.conversation_history = []
+
+    def get_chat_completion(self, system_prompt, user_prompt):
+        """使用DeepSeek API获取聊天回复，简化版"""
+        try:
+            # 添加有关任务批处理的提示
+            if "任务批处理" not in system_prompt:
+                system_prompt += """
+## 任务批处理能力
+你可以一次返回多个连续任务，但暂时请避免使用这个功能，只返回单个动作。
+示例格式:
+
+```json
+{"action": "move", "x": 100, "y": 64, "z": -200, "chat": "我正在移动到新的位置"}
+```
+
+暂时不要使用任务批处理功能，直到系统更加稳定。
+"""
+            
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.api_key}"
+            }
+            
+            payload = {
+                "model": "deepseek-chat",
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                "temperature": 0.5,  # 降低温度以获得更可预测的结果
+                "max_tokens": 1024   # 减少token数量
+            }
+            
+            response = requests.post(
+                f"{self.base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=30
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            if "choices" in result and len(result["choices"]) > 0:
+                return result["choices"][0]["message"]["content"]
+            else:
+                raise Exception("API响应格式错误")
+        except Exception as e:
+            logging.error(f"DeepSeek API异常: {e}")
+            # 返回一个简单的默认响应，而不是抛出异常
+            return '{"action": "look", "x": 0, "y": 64, "z": 0, "chat": "我无法执行完整的任务，正在环顾四周重新定位"}' 
