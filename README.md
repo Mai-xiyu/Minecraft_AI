@@ -1,6 +1,6 @@
 # Minecraft AI
 
-一个基于本地大语言模型的 Minecraft AI 代理系统，能够在 Minecraft 中自主执行各种任务。AI 代理可以使用本地 DeepSeek-1.5b 模型或 DeepSeek API 进行决策，通过模式识别和缓存系统来提高效率，并具有完整的记忆系统来学习和改进行为。
+一个基于本地大语言模型的 Minecraft AI 代理系统，能够在 Minecraft 中自主执行各种任务。AI 代理可以使用本地 DeepSeek-1.5b 模型或 DeepSeek API 进行决策，通过模式识别和缓存系统来提高效率，并具有完整的记忆系统来学习和改进行为。(明知是史为何不避)
 
 作者：Mai-xiyu(Mai-xiyu)  
 邮箱：maixiyumc@gmail.com  
