@@ -217,13 +217,77 @@ async function attackEntity(bot, entityName) {
                 bot.pathfinder.setGoal(null);
                 resolve();
             }
-        }, 1000);
+        }, 1000); // Reduced interval for faster check
     });
     
     // 攻击实体
     bot.lookAt(entity.position.offset(0, entity.height, 0));
     bot.attack(entity);
 }
+
+// --- 新增复合动作：跳跃攻击 ---
+async function jumpAttack(bot, targetIdOrName) {
+    console.log(`尝试跳跃攻击目标: ${targetIdOrName}`);
+    // 查找目标实体 (通过ID或名称)
+    const targetEntity = findEntityByIdOrName(bot, targetIdOrName);
+
+    if (!targetEntity) {
+        console.warn(`跳跃攻击失败: 找不到目标 ${targetIdOrName}`);
+        return { success: false, error: `找不到目标实体: ${targetIdOrName}` };
+    }
+
+    const distance = bot.entity.position.distanceTo(targetEntity.position);
+    console.log(`目标距离: ${distance.toFixed(2)}`);
+
+    // 检查距离是否合适
+    if (distance > 5) { // 如果太远，先移动过去
+        console.log("目标太远，先移动靠近...");
+        try {
+            const goal = new GoalNear(targetEntity.position.x, targetEntity.position.y, targetEntity.position.z, 2);
+            await bot.pathfinder.goto(goal);
+            console.log("已移动到目标附近。");
+        } catch (moveError) {
+            console.error(`移动到目标 ${targetIdOrName} 失败:`, moveError);
+            return { success: false, error: `移动到目标失败: ${moveError.message}` };
+        }
+    }
+
+    // 执行跳跃攻击
+    try {
+        bot.lookAt(targetEntity.position.offset(0, targetEntity.height * 0.8, 0)); // 稍微向下看一点可能有助于命中
+        bot.setControlState('jump', true); // 开始跳跃
+        
+        // 等待一小段时间让跳跃生效
+        await bot.waitForTicks(2); // 2 ticks (约100ms) - 需要根据实际情况调整
+
+        // 执行攻击
+        bot.attack(targetEntity);
+        console.log(`对 ${targetIdOrName} (ID: ${targetEntity.id}) 执行了攻击`);
+
+        // 等待攻击动画完成或一小段时间
+        await bot.waitForTicks(1);
+
+        bot.setControlState('jump', false); // 结束跳跃
+        console.log(`完成对 ${targetIdOrName} 的跳跃攻击`);
+        return { success: true, message: `成功对 ${targetIdOrName} 执行了跳跃攻击` };
+
+    } catch (attackError) {
+        console.error(`跳跃攻击时发生错误:`, attackError);
+        bot.setControlState('jump', false); // 确保跳跃状态被重置
+        return { success: false, error: `跳跃攻击失败: ${attackError.message}` };
+    }
+}
+
+// 辅助函数：通过ID或名称查找实体
+function findEntityByIdOrName(bot, idOrName) {
+    return Object.values(bot.entities).find(e => 
+        e.id == idOrName || // 检查数字ID
+        e.username === idOrName || // 检查玩家名称
+        e.name === idOrName // 检查实体名称 (例如 'skeleton', 'zombie')
+        // 可以根据需要添加 displayName 等
+    );
+}
+// ---------------------------------
 
 // 看向指定位置
 async function lookAt(bot, x, y, z) {
@@ -238,5 +302,6 @@ module.exports = {
     placeBlock,
     digBlock,
     attackEntity,
+    jumpAttack,        // 导出新增函数
     lookAt
 }; 

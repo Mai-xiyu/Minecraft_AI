@@ -90,7 +90,8 @@ let botState = {
     currentTask: null,
     lastAction: null,
     actionResult: null,
-    recentChats: []
+    recentChats: [],
+    timeOfDay: '未知'
 };
 
 // 全局机器人实例
@@ -520,7 +521,8 @@ async function start() {
             currentTask: null,
             lastAction: null,
             actionResult: null,
-            recentChats: []
+            recentChats: [],
+            timeOfDay: '未知'
         };
         
         // 使用全局配置变量
@@ -690,6 +692,14 @@ function updateBotState(bot) {
         botState.health = bot.health || 0;
         botState.food = bot.food || 0;
         
+        // 获取时间信息
+        try {
+            botState.timeOfDay = bot.time.timeOfDay;
+        } catch (timeError) {
+            console.error("获取时间信息时出错:", timeError.message);
+            botState.timeOfDay = '未知'; // Fallback value
+        }
+        
         // 获取附近实体信息
         botState.nearbyEntities = [];
         if (bot.entities) {
@@ -699,10 +709,15 @@ function updateBotState(bot) {
                 
                 const distance = bot.entity.position.distanceTo(entity.position);
                 if (distance <= 16) { // 只考虑16格内的实体
+                    // 判断实体是否敌对 (基于 'kind' 属性)
+                    const isHostile = entity.kind === 'Hostile mobs';
+
                     botState.nearbyEntities.push({
                         id: entityId,
                         name: entity.name || entity.username || 'unknown',
                         type: entity.type || 'unknown',
+                        kind: entity.kind || 'unknown', // 添加 kind 属性供参考
+                        isHostile: isHostile, // 添加 isHostile 标志
                         position: {
                             x: entity.position.x,
                             y: entity.position.y,
@@ -766,37 +781,97 @@ function updateBotState(bot) {
 
 // 执行动作
 async function executeActionByType(bot, action) {
+    console.log(`接收到动作: ${action.type}`, action); // 记录接收到的完整动作
+    if (!action || !action.type) {
+        throw new Error('无效的动作对象');
+    }
+
+    let result = null;
+    let message = "";
+
+    try {
         switch (action.type) {
-            case 'move':
-                await actions.moveToPosition(bot, action.x, action.y, action.z);
+            case 'moveTo':
+                result = await actions.moveToPosition(bot, action.x, action.y, action.z);
                 break;
             case 'collect':
-                await actions.collectBlock(bot, action.blockType, action.count);
+                result = await actions.collect(bot, action);
                 break;
-            case 'craft':
-                await crafting.craftItem(bot, action.item, action.count);
-                break;
-            case 'place':
-                await actions.placeBlock(bot, action.item, action.x, action.y, action.z);
+            case 'placeBlock':
+                result = await actions.placeBlock(bot, action.itemName, action.x, action.y, action.z);
                 break;
             case 'dig':
-                await actions.digBlock(bot, action.x, action.y, action.z);
-                break;
-            case 'equip':
-                await inventory.equipItem(bot, action.item);
+                result = await actions.digBlock(bot, action.x, action.y, action.z);
                 break;
             case 'attack':
-                await actions.attackEntity(bot, action.entityName);
+                result = await actions.attackEntity(bot, action.target);
+                break;
+            case 'jumpAttack': 
+                if (!action.target) {
+                    throw new Error('jumpAttack 动作需要 target 参数');
+                }
+                result = await actions.jumpAttack(bot, action.target);
+                break;
+            case 'lookAt':
+                result = await actions.lookAt(bot, action.x, action.y, action.z);
+                break;
+            case 'equip':
+                result = await inventory.equipItem(bot, action.itemName, action.destination || 'hand');
+                break;
+            case 'unequip':
+                result = await inventory.unequipItem(bot, action.destination || 'hand');
+                break;
+            case 'useHeldItem':
+                bot.activateItem(); // 这是一个同步操作
+                message = "使用了手持物品";
+                break;
+            case 'craft':
+                result = await crafting.craftItem(bot, action.itemName, action.count || 1);
                 break;
             case 'chat':
+                if (!action.message) {
+                    throw new Error('聊天动作需要消息内容');
+                }
                 bot.chat(action.message);
+                message = `发送了聊天消息: ${action.message}`;
                 break;
-            case 'look':
-                await actions.lookAt(bot, action.x, action.y, action.z);
-                break;
+            case 'setControlState':
+                 if (!action.control || typeof action.state !== 'boolean') {
+                     throw new Error('setControlState 需要 control 和 state (boolean) 参数');
+                 }
+                 bot.setControlState(action.control, action.state);
+                 message = `设置控制状态 ${action.control} 为 ${action.state}`;
+                 break;
+             case 'clearControlStates':
+                 bot.clearControlStates();
+                 message = '清除了所有控制状态';
+                 break;
+            case 'wait': // 添加等待动作
+                 const ticks = action.ticks || 20; // 默认等待1秒 (20 ticks)
+                 console.log(`等待 ${ticks} ticks...`);
+                 await bot.waitForTicks(ticks);
+                 message = `等待了 ${ticks} ticks`;
+                 break;
             default:
-                throw new Error(`未知动作类型: ${action.type}`);
+                throw new Error(`未知的动作类型: ${action.type}`);
         }
+
+        // 如果 actions 返回了结果，使用它；否则，构建一个简单的成功结果
+        if (result) {
+            return result; 
+        } else {
+            return { success: true, message: message || `动作 ${action.type} 执行成功` };
+        }
+
+    } catch (err) {
+        console.error(`执行动作 ${action.type} 失败:`, err);
+        // 返回包含错误信息的标准格式
+        return {
+            success: false,
+            error: err.message || `执行动作 ${action.type} 时发生未知错误`,
+            action: action // Optionally include the action that failed
+        };
+    }
 }
 
 // 状态端点
@@ -849,7 +924,8 @@ app.get('/bot/status', (req, res) => {
                 food: 0,
                 nearbyEntities: [],
                 nearbyBlocks: [],
-                recentChats: botState.recentChats || []
+                recentChats: botState.recentChats || [],
+                timeOfDay: botState.timeOfDay
             }
         });
     }
@@ -894,7 +970,8 @@ app.post('/bot/action', async (req, res) => {
                 position: botState.position,
                 health: botState.health,
                 food: botState.food,
-                inventory: botState.inventory.slice(0, 10)  // 只返回前10项以减少数据量
+                inventory: botState.inventory.slice(0, 10),  // 只返回前10项以减少数据量
+                timeOfDay: botState.timeOfDay
             }
         });
   } catch (err) {

@@ -1,0 +1,71 @@
+2025-04-07 18:32:04,857 - root - INFO - 配置已加载
+2025-04-07 18:33:23,440 - root - INFO - 配置已保存
+2025-04-07 18:33:23,441 - root - INFO - 已更新配置文件
+2025-04-07 18:33:23,465 - root - INFO - 成功连接到机器人服务器
+2025-04-07 18:33:33,643 - root - ERROR - 启动AI失败: No module named 'ai.vision_learning'
+2025-04-07 18:33:33,643 - root - INFO - AI已停止
+2025-04-07 18:33:33,662 - root - INFO - 尝试连接到 http://localhost:3002/status...
+2025-04-07 18:33:38,357 - root - INFO - 配置已保存
+2025-04-07 18:33:38,357 - root - INFO - 已更新配置文件
+2025-04-07 18:33:38,361 - root - INFO - 成功连接到机器人服务器
+2025-04-07 18:33:38,364 - root - ERROR - 启动AI失败: No module named 'ai.vision_learning'
+2025-04-07 18:33:38,364 - root - INFO - AI已停止
+2025-04-07 18:33:55,636 - root - INFO - 配置已保存
+2025-04-07 18:33:55,637 - root - INFO - 已更新配置文件
+2025-04-07 18:33:55,640 - root - INFO - 成功连接到机器人服务器
+2025-04-07 18:33:55,643 - root - ERROR - 启动AI失败: No module named 'ai.vision_learning'
+2025-04-07 18:33:55,644 - root - INFO - AI已停止
+2025-04-07 18:34:59,169 - root - INFO - 配置已保存
+2025-04-07 18:34:59,170 - root - INFO - 已更新配置文件
+2025-04-07 18:34:59,175 - root - INFO - 成功连接到机器人服务器
+2025-04-07 18:34:59,179 - root - ERROR - 启动AI失败: No module named 'ai.vision_learning'
+2025-04-07 18:34:59,179 - root - INFO - AI已停止
+2025-04-07 18:35:01,398 - root - INFO - 尝试连接到 http://localhost:3002/status...
+2025-04-07 18:35:44,626 - root - INFO - 配置已保存
+2025-04-07 18:35:46,490 - root - INFO - 配置已保存
+2025-04-07 18:35:46,490 - root - INFO - 已更新配置文件
+2025-04-07 18:35:46,498 - root - INFO - 成功连接到机器人服务器
+2025-04-07 18:35:46,500 - root - ERROR - 启动AI失败: No module named 'ai.vision_learning'
+2025-04-07 18:35:46,501 - root - INFO - AI已停止
+2025-04-07 18:35:51,761 - root - INFO - 尝试连接到 http://localhost:3002/status...
+2025-04-11 01:54:42,978 - root - INFO - 配置已加载
+2025-04-11 02:00:43,177 - MinecraftAI.GUI - INFO - 配置已加载
+2025-04-11 02:02:28,789 - MinecraftAI.GUI - INFO - 配置已加载
+2025-04-11 02:04:30,674 - MinecraftAI.GUI - INFO - 配置已加载
+2025-04-11 02:04:40,174 - MinecraftAI.GUI - INFO - Configuration saved
+2025-04-11 02:04:40,174 - MinecraftAI.GUI - INFO - Configuration saved
+2025-04-11 02:04:40,175 - MinecraftAI.GUI - INFO - Starting AI...
+2025-04-11 02:04:48,055 - MinecraftAI.GUI - ERROR - Failed to start AI: No module named 'ai.vision_learning'
+2025-04-11 02:04:49,982 - MinecraftAI.GUI - INFO - Stopping AI...
+2025-04-11 02:04:49,983 - MinecraftAI.GUI - INFO - AI stopped
+2025-04-11 02:08:03,653 - MinecraftAI.GUI - ERROR - 加载配置失败: name 'current_lang' is not defined
+2025-04-11 02:08:03,656 - MinecraftAI.GUI - INFO - 配置已保存
+2025-04-11 02:11:07,984 - MinecraftAI.GUI - INFO - 配置已加载
+2025-04-11 02:15:09,414 - MinecraftAI.GUI - INFO - 配置已加载
+2025-04-11 02:15:17,092 - MinecraftAI.GUI - INFO - Configuration saved
+2025-04-11 02:15:17,092 - MinecraftAI.GUI - INFO - Configuration saved
+2025-04-11 02:15:17,092 - MinecraftAI.GUI - INFO - Starting AI...
+2025-04-11 02:15:22,213 - MinecraftAI.GUI - ERROR - Failed to start AI: No module named 'ai.vision_learning'
+2025-04-11 02:15:23,578 - MinecraftAI.GUI - INFO - Stopping AI...
+2025-04-11 02:15:23,580 - MinecraftAI.GUI - INFO - AI stopped
+2025-04-11 02:18:22,565 - MinecraftAI.GUI - INFO - 配置已加载
+2025-04-11 02:18:45,249 - MinecraftAI.GUI - ERROR - Failed to send action: HTTPConnectionPool(host='localhost', port=3002): Max retries exceeded with url: /bot/chat (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x000001F0633D2F10>: Failed to establish a new connection: [WinError 10061] 由于目标计算机积极拒绝，无法连接。'))
+2025-04-11 02:21:16,046 - MinecraftAI.GUI - INFO - 配置已加载
+2025-04-11 02:21:21,520 - MinecraftAI.GUI - INFO - 配置已保存
+2025-04-11 02:21:21,520 - MinecraftAI.GUI - INFO - 配置已保存
+2025-04-11 02:21:21,520 - MinecraftAI.GUI - INFO - 正在启动AI...
+2025-04-11 02:21:28,232 - MinecraftAI.GUI - ERROR - 启动AI失败: No module named 'ai.vision_learning'
+2025-04-11 02:25:09,987 - MinecraftAI.GUI - INFO - 配置已加载
+2025-04-11 02:25:14,892 - MinecraftAI.GUI - INFO - 配置已保存
+2025-04-11 02:25:14,892 - MinecraftAI.GUI - INFO - 配置已保存
+2025-04-11 02:25:14,892 - MinecraftAI.GUI - INFO - 正在启动AI...
+2025-04-11 02:25:22,225 - MinecraftAI.GUI - ERROR - 启动AI失败: No module named 'ai.vision_capture'
+2025-04-11 02:25:25,870 - MinecraftAI.GUI - INFO - 正在停止AI...
+2025-04-11 02:25:25,870 - MinecraftAI.GUI - INFO - AI已停止
+2025-04-11 02:26:33,307 - MinecraftAI.GUI - INFO - 配置已保存
+2025-04-11 02:26:33,307 - MinecraftAI.GUI - INFO - 配置已保存
+2025-04-11 02:26:33,308 - MinecraftAI.GUI - INFO - 正在启动AI...
+2025-04-11 02:26:33,315 - MinecraftAI.GUI - ERROR - 启动AI失败: 未提供DeepSeek API密钥
+2025-04-11 02:26:35,081 - MinecraftAI.GUI - INFO - 正在停止AI...
+2025-04-11 02:26:35,081 - MinecraftAI.GUI - INFO - AI已停止
+2025-04-11 03:03:37,272 - MinecraftAI.GUI - INFO - 配置已加载

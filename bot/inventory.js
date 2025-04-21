@@ -7,11 +7,27 @@ function getInventoryItems(bot) {
     // 主物品栏
     for (const item of bot.inventory.items()) {
         if (item) {
-            items.push({
+            const itemData = {
                 name: item.name,
                 count: item.count,
-                slot: item.slot
-            });
+                slot: item.slot,
+                // 添加耐久度信息 (如果适用)
+                durability: null // Default to null
+            };
+
+            // 检查是否有最大耐久度信息且大于0 (表明是可损坏物品)
+            if (item.maxDurability !== undefined && item.maxDurability > 0) {
+                // Mineflayer 的 item 对象通常有 durabilityUsed 属性
+                // 如果没有，则假定为0 (全新)
+                const durabilityUsed = item.durabilityUsed === undefined ? 0 : item.durabilityUsed;
+                const remainingDurability = item.maxDurability - durabilityUsed;
+                itemData.durability = {
+                    current: remainingDurability,
+                    max: item.maxDurability
+                };
+            }
+
+            items.push(itemData);
         }
     }
     

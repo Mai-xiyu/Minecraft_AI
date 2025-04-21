@@ -5,24 +5,30 @@ from PyQt6.QtCore import Qt
 import os
 from pathlib import Path
 import sys
+# Import i18n functions
+from .i18n import _, register_widget
 
 class SponsorPage(QWidget):
     def __init__(self):
         super().__init__()
         self.setup_ui()
+        # Note: update_ui_texts() in MainWindow handles the initial update
+        # No need to call it explicitly here unless this widget is created standalone
         
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # 标题
-        title = QLabel("支持作者")
+        title = QLabel()
         title.setStyleSheet("font-size: 24px; font-weight: bold;")
+        register_widget(title, "sponsor_title") # Register for translation
         layout.addWidget(title, alignment=Qt.AlignmentFlag.AlignCenter)
         
         # 说明文字
-        desc = QLabel("如果这个项目对你有帮助，欢迎赞助支持！")
+        desc = QLabel()
         desc.setStyleSheet("font-size: 16px; margin: 10px;")
+        register_widget(desc, "sponsor_desc") # Register for translation
         layout.addWidget(desc, alignment=Qt.AlignmentFlag.AlignCenter)
         
         # 按钮容器
@@ -30,7 +36,8 @@ class SponsorPage(QWidget):
         button_layout = QHBoxLayout(button_container)
         
         # 支付宝按钮
-        self.alipay_btn = QPushButton("支付宝")
+        self.alipay_btn = QPushButton()
+        register_widget(self.alipay_btn, "sponsor_alipay_button") # Register
         self.alipay_btn.setStyleSheet("""
             QPushButton {
                 background-color: #1677FF;
@@ -56,7 +63,8 @@ class SponsorPage(QWidget):
         button_layout.addWidget(self.alipay_btn)
         
         # 微信按钮
-        self.wechat_btn = QPushButton("微信")
+        self.wechat_btn = QPushButton()
+        register_widget(self.wechat_btn, "sponsor_wechat_button") # Register
         self.wechat_btn.setStyleSheet("""
             QPushButton {
                 background-color: #07C160;
@@ -99,9 +107,9 @@ class SponsorPage(QWidget):
             if not pixmap.isNull():
                 alipay_qr.setPixmap(pixmap.scaled(300, 300, Qt.AspectRatioMode.KeepAspectRatio))
             else:
-                alipay_qr.setText("无法加载支付宝二维码")
+                alipay_qr.setText(_("sponsor_qr_load_error")) # Translate
         else:
-            alipay_qr.setText("未找到支付宝二维码")
+            alipay_qr.setText(_("sponsor_qr_not_found")) # Translate
         alipay_layout.addWidget(alipay_qr, alignment=Qt.AlignmentFlag.AlignCenter)
         self.qr_stack.addWidget(alipay_page)
         
@@ -115,9 +123,9 @@ class SponsorPage(QWidget):
             if not pixmap.isNull():
                 wechat_qr.setPixmap(pixmap.scaled(300, 300, Qt.AspectRatioMode.KeepAspectRatio))
             else:
-                wechat_qr.setText("无法加载微信二维码")
+                wechat_qr.setText(_("sponsor_qr_load_error")) # Translate
         else:
-            wechat_qr.setText("未找到微信二维码")
+            wechat_qr.setText(_("sponsor_qr_not_found")) # Translate
         wechat_layout.addWidget(wechat_qr, alignment=Qt.AlignmentFlag.AlignCenter)
         self.qr_stack.addWidget(wechat_page)
         

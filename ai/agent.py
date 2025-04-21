@@ -9,6 +9,10 @@ import threading
 import concurrent.futures
 import gc
 import torch
+import re # Import re for regex parsing
+from pathlib import Path # <<<确保导入 Path>>>
+# Import i18n function for logging
+from gui.i18n import _
 try:
     from .deepseek_api import DeepSeekAPI
 except ImportError:
@@ -23,6 +27,9 @@ from .vision_learning import VisionLearningSystem
 from .vision_capture import MinecraftVisionCapture
 from torchvision import transforms
 from PIL import Image
+import base64
+from io import BytesIO
+import math # <<<导入 math 以便检查 NaN/Infinity (如果需要)>>>
 
 # 在文件开头添加任务定义
 TASKS = {
@@ -75,7 +82,11 @@ class MinecraftAgent:
     
     def __init__(self, api):
         self.api = api
+        # Use a more specific logger name
         self.logger = logging.getLogger("MinecraftAI.Agent")
+        # Ensure logger level is appropriate (e.g., INFO)
+        self.logger.setLevel(logging.INFO)
+        
         self.memory = Memory()
         self.current_task = None
         
@@ -99,9 +110,10 @@ class MinecraftAgent:
         if self.use_local_model:
             try:
                 self.local_model = LocalLLM()
-                print("使用本地大语言模型")
+                self.logger.info("Using local large language model") # Log in English or use key?
             except Exception as e:
-                print(f"本地模型加载失败: {e}")
+                # Use translated log key if available, otherwise fallback
+                self.logger.error(_("log_ai_error", error=f"Local model loading failed: {e}"))
                 self.use_local_model = False
         
         self.cache = CacheSystem()
@@ -115,148 +127,170 @@ class MinecraftAgent:
         self.predictions_used = 0
         self.prediction_successes = 0
         
-        # 视觉系统 - 修改为默认开启
-        self.use_vision = True  # 默认开启
-        try:
-            # 从配置中获取视觉模型类型
+        # 视觉系统
+        self.use_vision = self.config.get('vision', {}).get('use_vision', True)
+        self.vision_learning = None
+        self.vision_system_degraded = False
+        if self.use_vision:
+            try:
             vision_config = self.config.get('vision', {})
-            vision_model = vision_config.get('vision_model', 'MobileNet')  # 默认使用轻量级模型
-            
-            # 初始化视觉学习系统
+                vision_model = vision_config.get('vision_model', 'MobileNet')
             self.vision_learning = VisionLearningSystem(model_name=vision_model)
-            print("视觉学习系统已初始化")
+                self.logger.info(f"Vision learning system initialized with model: {vision_model}")
         except Exception as e:
-            print(f"视觉系统初始化出现问题，将以降级模式运行: {e}")
-            # 不关闭视觉系统，但标记为降级模式
+                 self.logger.warning(_("log_vision_system_init_failed", error=str(e)))
+                 self.logger.warning(_("log_vision_system_init_warning"))
             self.vision_system_degraded = True
+                 self.use_vision = False # Disable vision if init failed
     
     def set_task(self, task):
         """设置当前任务"""
         if task in TASKS:
             self.current_task = task
-            self.logger.info(f"设置任务: {task} - {TASKS[task]}")
+            self.logger.info(f"Task set: {task} - {TASKS[task]}") # Keep internal logs simpler
             return True
         else:
-            self.logger.error(f"未知任务: {task}")
+            self.logger.error(f"Unknown task: {task}")
             return False
     
     def step(self):
-        """执行一个步骤"""
+        """执行一个步骤，包含视觉信息处理"""
         try:
             # 获取机器人当前状态
-            print("正在获取机器人状态...")  # 调试日志
+            self.logger.info("Getting bot status...") # Internal log
             bot_status = self.get_bot_status()
             if not bot_status or not bot_status.get('connected'):
-                raise Exception("机器人未连接")
-            print("机器人状态:", bot_status)  # 调试日志
-            
-            # 如果启用了视觉，获取当前视觉画面
-            current_frame = None
-            if self.use_vision:
-                # 直接从API获取
-                current_frame = self.vision_learning.get_frame_from_bot(f"{self.mc_api}/bot/vision")
-            
-            # 1. 尝试使用模式识别进行预测
-            if self.use_prediction and len(self.memory.memories) > 10:
-                predicted_action = self.pattern_recognition.predict_action(bot_status.get('state', {}))
-                if predicted_action:
-                    similarity = self.pattern_recognition.calculate_similarity(
-                        self.pattern_recognition.encode_state(bot_status.get('state', {})),
-                        self.pattern_recognition.encode_state(bot_status.get('state', {}))
-                    )
-                    
-                    if similarity > self.prediction_threshold:
-                        print(f"使用预测的动作: {predicted_action}")
-                        self.predictions_used += 1
-                        
-                        # 执行预测的动作
-                        try:
-                            bot_response = requests.post(
-                                f"{self.mc_api}/bot/action",
-                                json=predicted_action,
-                                timeout=5
-                            )
-                            
-                            if bot_response.status_code == 200:
-                                result = bot_response.json()
-                                
-                                # 检查预测是否成功
-                                if "success" in str(result).lower():
-                                    self.prediction_successes += 1
-                                
-                                # 记录动作和结果
-                                self.memory.add_memory({
-                                    'action': predicted_action,
-                                    'result': result,
-                                    'timestamp': time.time(),
-                                    'predicted': True
-                                })
-                                
-                                # 更新模式识别
-                                self.pattern_recognition.add_observation(
-                                    bot_status.get('state', {}), 
-                                    predicted_action, 
-                                    result
-                                )
-                                
-                                # 执行动作后，使用视觉学习
-                                if self.use_vision and current_frame is not None:
-                                    self.vision_learning.learn_from_frame(current_frame, bot_status.get('state', {}), predicted_action, result)
-                                
-                                return result
-                        except:
-                            pass  # 预测失败，回退到常规流程
-            
-            # 2. 生成提示词
-            print("正在生成提示词...")  # 调试日志
-            prompt = self.generate_prompt(self.current_task)
-            print("生成的提示词:", prompt)  # 调试日志
-            
-            # 3. 尝试从缓存获取
-            cached_response = self.cache.get(prompt)
-            if cached_response:
-                self.cached_responses += 1
-                response = cached_response
-            else:
-                # 4. 使用本地模型或API
-                if self.use_local_model:
-                    response = self.local_model.chat(prompt)
-                else:
+                # Use translated log for user
+                self.logger.warning(_("log_get_bot_status_failed", error="Bot not connected or status unavailable"))
+                return {"success": False, "error": "机器人未连接"}
+            self.logger.info("Bot status retrieved successfully.") # Internal log
+            current_state_data = bot_status.get('state', {})
+
+            # 获取视觉帧 (Base64)
+            image_base64 = None
+            if self.use_vision and self.vision_learning:
+                self.logger.info("Getting vision data...") # Internal log
+                try:
+                    vision_response = requests.get(f"{self.mc_api}/bot/vision", timeout=10)
+                    if vision_response.status_code == 200:
+                        vision_data = vision_response.json()
+                        if vision_data.get('success') and vision_data.get('data'):
+                            image_base64 = vision_data['data'].split('base64,')[-1]
+                            if len(image_base64) * 3 / 4 > 5_000_000:
+                                self.logger.warning("Vision image too large, skipping inclusion.") # Internal log
+                                image_base64 = None
+                            else:
+                                self.logger.info("Vision data retrieved.") # Internal log
+                        elif vision_data.get('error'):
+                             self.logger.warning(_("log_vision_get_frame_failed", error=vision_data.get('error')))
+                        else:
+                             self.logger.info("Vision data retrieved, but no image data found.") # Internal log
+                    else:
+                         self.logger.warning(f"Vision API request failed: {vision_response.status_code}") # Internal log
+                except requests.exceptions.RequestException as e:
+                    self.logger.error(_("log_vision_get_frame_failed", error=f"RequestException: {e}"))
+                except Exception as e:
+                    self.logger.error(_("log_vision_get_frame_failed", error=f"Unknown error: {e}"))
+            elif self.use_vision and not self.vision_learning:
+                 self.logger.warning("Vision enabled but system not initialized.") # Internal log
+
+            # 1. 模式识别预测 (Optional)
+            # ...
+
+            # 2. 生成文本提示部分
+            self.logger.info("Generating text prompt...") # Internal log
+            text_prompt = self.generate_text_prompt(current_state_data)
+            self.logger.info("Text prompt generated.") # Internal log
+
+            # 3. 构建发送给 LLM 的消息列表
+            messages = []
+            messages.append({"role": "system", "content": SYSTEM_PROMPT})
+            user_content = [{"type": "text", "text": text_prompt}]
+            if image_base64 and not self.use_local_model:
+                user_content.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:image/png;base64,{image_base64}"}
+                })
+                self.logger.info("Image data added to prompt.") # Internal log
+            elif image_base64 and self.use_local_model:
+                 user_content[0]["text"] += "\n\n[Note: Visual context is available.]"
+                 self.logger.info("Image presence noted for local model.") # Internal log
+            messages.append({"role": "user", "content": user_content})
+
+            # 4. 缓存 (暂未实现多模态缓存)
+            cached_response = None
+            response = None
+
+            # 5. 调用 LLM
+            llm_type = 'Local' if self.use_local_model else 'API'
+            self.logger.info(f"Calling {llm_type} LLM...") # Internal log
+            start_time = time.time()
+            try:
+                if self.use_local_model and hasattr(self, 'local_model'):
+                    response = self.local_model.chat(messages)
+                elif not self.use_local_model and self.api:
                     self.api_calls += 1
-                    response = self.api.chat(prompt)
-                    
-                    # 将响应添加到缓存
-                    self.cache.put(prompt, response)
+                    response = self.api.chat(messages)
+                else:
+                     raise Exception(f"LLM client ({llm_type}) not available.")
+            except Exception as llm_error:
+                 self.logger.error(_("log_ai_error", error=f"LLM call failed: {llm_error}"))
+                 # Fallback action
+                 action = {"type": "chat", "message": "Error communicating with LLM."}
+                 result = {"success": False, "error": f"LLM call failed: {llm_error}"}
+                 response = None # Ensure response is None so we don't parse
+
+            end_time = time.time()
+            self.logger.info(f"LLM call finished in {end_time - start_time:.2f}s.") # Internal log
             
             # 处理响应
-            if not response or not response.strip():
-                raise Exception("API返回空响应")
-            
-            # 清理响应文本
-            response = self._clean_response(response)
-            print("清理后的响应:", response)  # 调试日志
-            
-            # 解析响应为动作
-            try:
-                action = self._parse_action(response)
-                print("解析的动作:", action)  # 调试日志
-                
-                # 发送动作到机器人服务器
+            action = None
+            if response is not None:
+                if not response.strip():
+                    self.logger.warning("LLM returned empty response.") # Internal log
+                    action = {"type": "chat", "message": "Thinking..."}
+                    result = {"success": False, "error": "LLM returned empty response"}
+                else:
+                    self.logger.info("Cleaning and parsing LLM response...") # Internal log
+                    try:
+                        cleaned_response = self._clean_response(response)
+                        action = self._parse_action(cleaned_response)
+                        self.logger.info(f"Parsed action: {action}") # Internal log
+                    except Exception as e:
+                         self.logger.error(_("log_ai_error", error=f"Parsing LLM response failed: {e}\nRaw: {response[:200]}..."))
+                         action = {"type": "chat", "message": f"Error parsing response."}
+                         result = {"success": False, "error": f"Parsing response failed: {e}"}
+            # If action wasn't set due to LLM error or parsing error, create a default
+            if action is None:
+                if 'result' not in locals(): # If result wasn't set by LLM error handler
+                    action = {"type": "chat", "message": "Having trouble deciding..."}
+                    result = {"success": False, "error": "Action could not be determined"}
+                else: # Result already contains the error
+                    action = {"type": "chat", "message": "Error encountered, pausing."}
+
+            # 执行动作 (only if action was determined)
+            if 'error' not in result: # If no error occurred before action execution stage
                 try:
-                    print("正在发送动作到机器人服务器...")  # 调试日志
+                    self.logger.info(f"Sending action to bot server: {action}") # Internal log
                     bot_response = requests.post(
                         f"{self.mc_api}/bot/action",
                         json=action,
-                        timeout=5
+                        timeout=30
                     )
-                    
-                    print("机器人服务器响应状态码:", bot_response.status_code)  # 调试日志
-                    
-                    if bot_response.status_code != 200:
-                        raise Exception(f"机器人服务器返回错误: {bot_response.status_code}")
-                    
+                    self.logger.info(f"Bot server response code: {bot_response.status_code}") # Internal log
+
+                    if bot_response.status_code == 200:
                     result = bot_response.json()
-                    print("机器人执行结果:", result)  # 调试日志
+                        self.logger.info(f"Bot execution result: {result}") # Internal log
+                    else:
+                        error_msg = f"Bot server error: {bot_response.status_code} - {bot_response.text}"
+                        result = {"success": False, "error": error_msg}
+                        self.logger.error(_("log_send_action_failed", error=error_msg))
+
+                except requests.exceptions.RequestException as e:
+                    error_msg = f"Communication error with bot server: {e}"
+                    result = {"success": False, "error": error_msg}
+                    self.logger.error(_("log_send_action_failed", error=error_msg))
                     
                     # 记录动作和结果
                     self.memory.add_memory({
@@ -265,130 +299,466 @@ class MinecraftAgent:
                         'timestamp': time.time()
                     })
                     
-                    # 更新模式识别系统
-                    self.pattern_recognition.add_observation(
-                        bot_status.get('state', {}), 
-                        action, 
-                        result
-                    )
-                    
-                    # 执行动作后，使用视觉学习
-                    if self.use_vision and current_frame is not None:
-                        self.vision_learning.learn_from_frame(current_frame, bot_status.get('state', {}), action, result)
-                    
-                    # 每10步打印绩效统计
-                    if (self.api_calls + self.cached_responses + self.predictions_used) % 10 == 0:
-                        print(f"API调用: {self.api_calls}, 缓存命中: {self.cached_responses}, "
-                              f"预测使用: {self.predictions_used}, 预测成功率: "
-                              f"{self.prediction_successes/max(1, self.predictions_used):.2f}")
+            # 统计
+            total_steps = self.api_calls + self.cached_responses + self.predictions_used
+            if total_steps > 0 and total_steps % 10 == 0:
+                 # Use internal log for stats
+                 self.logger.info(f"Stats - API: {self.api_calls}, Cache: {self.cached_responses}, Predict: {self.predictions_used}")
                     
                     return result
-                    
-                except requests.exceptions.RequestException as e:
-                    print(f"与机器人服务器通信失败: {e}")  # 调试日志
-                    raise Exception(f"与机器人服务器通信失败: {e}")
                 
             except Exception as e:
-                print(f"解析响应失败: {e}")  # 调试日志
-                raise Exception(f"解析响应失败: {str(e)}\n响应内容: {response}")
-            
-        except Exception as e:
-            print(f"步骤执行失败: {e}")  # 调试日志
-            raise Exception(f"执行步骤失败: {e}")
+             import traceback
+             self.logger.critical(_("log_ai_error", error=f"CRITICAL STEP ERROR: {e}\n{traceback.format_exc()}"))
+             return {"success": False, "error": f"Critical step error: {e}"}
     
     def _clean_response(self, response):
-        """清理API响应文本"""
-        try:
-            # 基本清理
+        """清理LLM返回的原始响应文本"""
+        if not isinstance(response, str): # Handle non-string input safely
+             self.logger.warning(f"Received non-string response to clean: {type(response)}. Converting to string.")
+             response = str(response)
+        # 移除可能的 Markdown 代码块标记
+        response = re.sub(r"```json\\n?", "", response)
+        response = re.sub(r"\\n?```", "", response)
+        # 移除可能的前后空白字符
             response = response.strip()
-            
-            # 移除可能的Markdown代码块标记
-            if response.startswith('```json'):
-                response = response[7:]
-            elif response.startswith('```'):
-                response = response[3:]
-            if response.endswith('```'):
-                response = response[:-3]
-            
-            # 再次清理空白
-            response = response.strip()
-            
-            # 确保响应以{开始，以}结束
-            if not response.startswith('{') or not response.endswith('}'):
-                # 尝试提取JSON对象
-                import re
-                json_match = re.search(r'\{[^{}]*\}', response)
-                if json_match:
-                    response = json_match.group()
-                else:
-                    # 尝试修复常见的格式问题
-                    response = response.replace("'", '"')  # 替换单引号
-                    response = response.replace("\n", "")  # 移除换行
-                    response = response.replace(" ", "")   # 移除空格
-                    
-                    if not (response.startswith('{') and response.endswith('}')):
-                        raise Exception("响应不包含有效的JSON对象")
-            
-            return response
-            
-        except Exception as e:
-            raise Exception(f"清理响应失败: {str(e)}\n原始响应: {response}")
-    
+        # 尝试替换掉可能存在的非标准引号或转义 (注意原始字符串中的反斜杠)
+        response = response.replace("\\\\'", "'").replace('\\\\"', '"') # Handles escaped quotes like \\' or \\"
+        # 特殊处理：如果包含换行符，通常只取第一行有效命令
+        if '\\n' in response:
+            self.logger.debug(f"LLM response contains newline, taking first line: {response}")
+            response = response.split('\\n')[0].strip()
+        return response
+
     def _parse_action(self, response):
-        """解析动作JSON"""
+        """
+        解析清理后的LLM响应，按顺序尝试多种格式，并进行验证。
+        失败则尝试下一种格式，最终回退到 chat。
+        """
+        cleaned_response = self._clean_response(response) # Clean first
+        self.logger.info(f"Parsing cleaned response: {cleaned_response}")
+
+        # 1. 尝试解析和验证 JSON 格式
         try:
-            import json
-            action = json.loads(response)
-            
-            # 验证基本格式
-            if not isinstance(action, dict):
-                raise Exception("响应不是有效的JSON对象")
-            
-            # 处理action字段
-            if 'action' in action and isinstance(action['action'], dict):
-                action = action['action']
-            
-            # 验证必需字段
-            if 'type' not in action:
-                raise Exception("动作缺少type字段")
-            
-            # 验证动作类型
-            valid_types = ['move', 'collect', 'craft', 'place', 'dig', 'equip', 'attack', 'chat', 'look']
-            if action['type'] not in valid_types:
-                raise Exception(f"无效的动作类型: {action['type']}")
-            
-            # 验证必需参数
-            self._validate_action_params(action)
-            
-            return action
-            
-        except json.JSONDecodeError as e:
-            raise Exception(f"JSON解析错误: {str(e)}")
+            action_json = json.loads(cleaned_response)
+            if isinstance(action_json, dict) and 'type' in action_json:
+                self._validate_action_params(action_json) # Throws on validation error
+                self.logger.info(f"Parsed and validated as JSON action: {action_json}")
+                return action_json
+            else:
+                self.logger.warning(f"Parsed JSON is not a valid action object: {cleaned_response}")
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
+            self.logger.debug(f"JSON parsing/validation failed: {e}. Trying next format.")
         except Exception as e:
-            raise Exception(f"动作解析错误: {str(e)}")
-    
+             self.logger.error(f"Unexpected error during JSON processing: {e}. Response: {cleaned_response}")
+
+        # 2. 尝试解析和验证函数格式: command(param=value)
+        match_func = re.match(r"^(\\w+)\\s*\\((.*)\\)$", cleaned_response)
+        if match_func:
+            command = match_func.group(1).strip()
+            params_str = match_func.group(2).strip()
+            parsed_action = {"type": command}
+            try:
+                # Parameter parsing logic (improved robustness slightly)
+                # Regex explanation:
+                # (\b\w+\b)          # Capture word boundary, one or more word chars, word boundary (key)
+                # \s*=\s*            # Match equals sign with optional surrounding whitespace
+                # (                  # Start capturing group for value
+                #  "[^"\\]*(?:\\.[^"\\]*)*"  # Match double-quoted string, handling escaped quotes
+                #  |                 # OR
+                #  '[^'\\]*(?:\\.[^'\\]*)*' # Match single-quoted string, handling escaped quotes
+                #  |                 # OR
+                #  [^,\s()]+         # Match any sequence not containing comma, whitespace, or parentheses (unquoted value)
+                # )                  # End capturing group for value
+                params = re.findall(r'(\b\w+\b)\s*=\s*("[^"\\]*(?:\\.[^"\\]*)*"|\'[^\']*(?:\\.[^\']*)*\'|[^,\s()]+)',
+                                    params_str)
+                for key, value in params:
+                    key = key.strip()
+                    value = value.strip()
+                    # Remove quotes and unescape
+                    if (value.startswith('"') and value.endswith('"')) or \
+                            (value.startswith("'") and value.endswith("'")):
+                        value = value[1:-1].encode('utf-8').decode('unicode_escape')  # More robust unescaping
+
+                    # Type conversion
+                    try:
+                        if value.lower() == 'true':
+                            parsed_action[key] = True
+                        elif value.lower() == 'false':
+                            parsed_action[key] = False
+                        elif '.' in value:
+                            parsed_action[key] = float(value)
+                else:
+                            parsed_action[key] = int(value)
+                    except ValueError:
+                        parsed_action[key] = value  # Keep as string
+
+                self._validate_action_params(parsed_action)  # Throws on validation error
+                self.logger.info(f"Parsed and validated as function action: {parsed_action}")
+                return parsed_action
+            except (ValueError, TypeError) as e:
+                self.logger.debug(
+                    f"Function action parsing/validation failed: {e}. Action attempt: {parsed_action}. Trying next format.")
+            except Exception as e:
+                self.logger.error(f"Error parsing function parameters: {e}")
+        # if match_func:
+        #     command = match_func.group(1).strip()
+        #     params_str = match_func.group(2).strip()
+        #     parsed_action = {"type": command}
+        #     try:
+        #         # Parameter parsing logic (improved robustness slightly)
+        #         # Regex explanation:
+        #         # (\b\w+\b)          # Capture word boundary, one or more word chars, word boundary (key)
+        #         # \s*=\s*            # Match equals sign with optional surrounding whitespace
+        #         # (                  # Start capturing group for value
+        #         #  "[^"\\]*(?:\\.[^"\\]*)*"  # Match double-quoted string, handling escaped quotes
+        #         #  |                 # OR
+        #         #  '[^'\]*(?:\.[^'\]*)*' # Match single-quoted string, handling escaped quotes
+        #         #  |                 # OR
+        #         #  [^,\s()]+         # Match any sequence not containing comma, whitespace, or parentheses (unquoted value)
+        #         # )                  # End capturing group for value
+        #         params = re.findall(r'(\\b\\w+\\b)\\s*=\\s*("[^"\\\\]*(?:\\\\.[^"\\\\]*)*"|'[^'\\\\]*(?:\\\\.[^'\\\\]*)*'|[^,\\s()]+)', params_str)
+        #         for key, value in params:
+        #             key = key.strip()
+        #             value = value.strip()
+        #             # Remove quotes and unescape
+        #             if (value.startswith('"') and value.endswith('"')) or \
+        #                (value.startswith("'") and value.endswith("'")):
+        #                 value = value[1:-1].encode('utf-8').decode('unicode_escape') # More robust unescaping
+        #
+        #             # Type conversion
+        #             try:
+        #                 if value.lower() == 'true': parsed_action[key] = True
+        #                 elif value.lower() == 'false': parsed_action[key] = False
+        #                 elif '.' in value: parsed_action[key] = float(value)
+        #                 else: parsed_action[key] = int(value)
+        #             except ValueError:
+        #                 parsed_action[key] = value # Keep as string
+        #
+        #         self._validate_action_params(parsed_action) # Throws on validation error
+        #         self.logger.info(f"Parsed and validated as function action: {parsed_action}")
+        #         return parsed_action
+        #     except (ValueError, TypeError) as e:
+        #         self.logger.debug(f"Function action parsing/validation failed: {e}. Action attempt: {parsed_action}. Trying next format.")
+        #     except Exception as e:
+        #          self.logger.error(f"Error parsing function parameters: {e}")
+
+        # 3. 尝试解析和验证简单格式: command target
+        match_simple = re.match(r"^(\\w+)\\s+(.+)$", cleaned_response)
+        if match_simple:
+            command = match_simple.group(1).strip()
+            target_str = match_simple.group(2).strip()
+            parsed_action = {"type": command}
+            try:
+                if command == 'chat':
+                    parsed_action['message'] = target_str
+                    self.logger.info(f"Parsed simple action as chat: {parsed_action}")
+                    # Basic validation for chat message presence
+                    self._validate_action_params(parsed_action)
+                    return parsed_action
+                elif command in ['attack', 'jumpAttack', 'collect', 'equip', 'craft', 'placeBlock']: # Added placeBlock
+                     # Assign target/blockType/itemName based on command
+                     if command in ['attack', 'jumpAttack']: parsed_action['target'] = target_str
+                     elif command == 'collect': parsed_action['blockType'] = target_str
+                     # PlaceBlock needs coordinates too, this simple format is ambiguous for placeBlock
+                     # elif command == 'placeBlock': parsed_action['itemName'] = target_str
+                     elif command in ['equip', 'craft']: parsed_action['itemName'] = target_str
+
+                     # Only proceed if the command makes sense in simple format
+                     if command != 'placeBlock': # Exclude placeBlock from simple validation for now
+                         self._validate_action_params(parsed_action) # Throws on validation error
+                         self.logger.info(f"Parsed and validated as simple action: {parsed_action}")
+                         return parsed_action
+                     else:
+                          self.logger.debug(f"Simple command '{command}' is ambiguous without coordinates.")
+                else:
+                    self.logger.debug(f"Simple command '{command}' not recognized for this format.")
+            except (ValueError, TypeError) as e:
+                self.logger.debug(f"Simple action parsing/validation failed: {e}. Action attempt: {parsed_action}. Falling back.")
+        except Exception as e:
+                 self.logger.error(f"Unexpected error processing simple action: {e}")
+
+        # 4. 如果所有格式都失败，回退到 Chat
+        self.logger.warning(f"Could not parse response into known valid action format: '{cleaned_response}'. Treating as chat.")
+        fallback_action = {"type": "chat", "message": cleaned_response if isinstance(cleaned_response, str) else str(cleaned_response)}
+        try:
+            # Validate fallback chat action - primarily checks if message exists and is string
+            self._validate_action_params(fallback_action)
+        except (ValueError, TypeError) as e:
+             self.logger.error(f"Fallback chat action failed validation? Error: {e}")
+             # Force a minimal chat message if validation fails (e.g., empty response)
+             fallback_action = {"type": "chat", "message": "[unparseable response]"}
+        return fallback_action
+
+
     def _validate_action_params(self, action):
-        """验证动作参数"""
-        action_type = action['type']
-        
-        # 定义每种动作类型需要的参数
-        required_params = {
-            'move': ['x', 'y', 'z'],
-            'collect': ['blockType', 'count'],
-            'craft': ['item', 'count'],
-            'place': ['item', 'x', 'y', 'z'],
-            'dig': ['x', 'y', 'z'],
-            'equip': ['item'],
-            'attack': ['entityName'],
-            'chat': ['message'],
-            'look': ['x', 'y', 'z']
+        """
+        验证解析出的动作及其参数是否有效。(最终重写版本 - 健壮)
+        如果验证失败，则抛出 ValueError 或 TypeError。
+        """
+        action_type = action.get('type')
+
+        # 1. Validate 'type' field
+        if not action_type:
+            raise ValueError("Action missing 'type' field")
+        if not isinstance(action_type, str):
+            raise TypeError(f"Action 'type' field must be a string, got {type(action_type).__name__}")
+
+        # 2. Define known action types and their required parameters
+        known_actions = {
+            "moveTo": {"x", "y", "z"},
+            "collect": {"blockType"},
+            "placeBlock": {"itemName", "x", "y", "z"},
+            "dig": {"x", "y", "z"},
+            "attack": {"target"},
+            "jumpAttack": {"target"},
+            "lookAt": {"x", "y", "z"},
+            "equip": {"itemName"},
+            "unequip": set(),
+            "useHeldItem": set(),
+            "craft": {"itemName"},
+            "chat": {"message"},
+            "setControlState": {"control", "state"},
+            "clearControlStates": set(),
+            "wait": set(),
         }
-        
-        # 检查必需参数
-        if action_type in required_params:
-            for param in required_params[action_type]:
-                if param not in action:
-                    raise Exception(f"动作 {action_type} 缺少必需参数: {param}")
+
+        # 3. Check if action type is known
+        if action_type not in known_actions:
+            raise ValueError(f"Unknown action type: '{action_type}'")
+
+        required_params_set = known_actions[action_type]
+        provided_params_set = set(action.keys()) - {'type'}
+
+        # 4. Check for missing required parameters
+        missing = required_params_set - provided_params_set
+        if missing:
+            raise ValueError(f"Action '{action_type}' missing required parameters: {', '.join(sorted(missing))}")
+
+        # 5. Perform Simplified Type Checks
+        try:
+            # Coordinate Checks
+            if action_type in ["moveTo", "placeBlock", "dig", "lookAt"]:
+                for coord in ['x', 'y', 'z']:
+                    val = action[coord]
+                    if not isinstance(val, (int, float)):
+                        raise TypeError(f"Parameter '{coord}' must be a number, got {type(val).__name__}")
+
+            # String Checks
+            if action_type in ["attack", "jumpAttack"]:
+                val = action['target']
+                if not isinstance(val, str) or not val:
+                    raise TypeError("Parameter 'target' must be a non-empty string")
+            elif action_type == "collect":
+                val = action['blockType']
+                if not isinstance(val, str) or not val:
+                    raise TypeError("Parameter 'blockType' must be a non-empty string")
+            elif action_type in ["placeBlock", "equip", "craft"]:
+                val = action['itemName']
+                if not isinstance(val, str) or not val:
+                    raise TypeError("Parameter 'itemName' must be a non-empty string")
+            elif action_type == "chat":
+                val = action['message']
+                if not isinstance(val, str):
+                    raise TypeError("Parameter 'message' must be a string")
+            elif action_type == "setControlState":
+                val_control = action['control']
+                if not isinstance(val_control, str) or not val_control:
+                    raise TypeError("Parameter 'control' must be a non-empty string")
+
+            # Boolean Check
+            if action_type == "setControlState":
+                val_state = action['state']
+                if not isinstance(val_state, bool):
+                    raise TypeError("Parameter 'state' must be a boolean")
+
+            # Optional Param Checks
+            if "ticks" in action:
+                if action_type != "wait":
+                    raise ValueError("Parameter 'ticks' only valid for 'wait' action")
+                val_ticks = action['ticks']
+                if not isinstance(val_ticks, int):
+                    raise TypeError("'ticks' must be an integer")
+                if val_ticks < 0:
+                    raise ValueError("'ticks' cannot be negative")
+            if "count" in action:
+                if action_type not in ["collect", "craft"]:
+                    raise ValueError(f"'count' not valid for '{action_type}' action")
+                val_count = action['count']
+                if not isinstance(val_count, int):
+                    raise TypeError("'count' must be an integer")
+                if val_count <= 0:
+                    raise ValueError("'count' must be positive")
+            if "radius" in action:
+                if action_type != "collect":
+                    raise ValueError("'radius' only valid for 'collect' action")
+                val_radius = action['radius']
+                if not isinstance(val_radius, (int, float)):
+                    raise TypeError("'radius' must be a number")
+                if val_radius <= 0:
+                    raise ValueError("'radius' must be positive")
+            if "destination" in action:
+                if action_type not in ["equip", "unequip"]:
+                    raise ValueError(f"'destination' only valid for '{action_type}' action")
+                val_dest = action['destination']
+                if not isinstance(val_dest, str) or not val_dest:
+                    raise TypeError("'destination' must be a non-empty string")
+
+            # Check for Unknown Parameters
+            allowed_params_set = set(known_actions[action_type])
+            if action_type == "wait" and "ticks" in action:
+                allowed_params_set.add("ticks")
+            if action_type == "collect":
+                if "count" in action:
+                    allowed_params_set.add("count")
+                if "radius" in action:
+                    allowed_params_set.add("radius")
+            if action_type == "craft" and "count" in action:
+                allowed_params_set.add("count")
+            if action_type in ["equip", "unequip"] and "destination" in action:
+                allowed_params_set.add("destination")
+
+            unknown = provided_params_set - allowed_params_set
+            if unknown:
+                self.logger.warning(
+                    f"Action '{action_type}' received parameters not strictly defined for it: {', '.join(sorted(unknown))}"
+                )
+
+        except Exception as e:
+            self.logger.error(f"Validation error: {e}")
+            raise
+        else:
+            self.logger.debug(f"Action validation passed for: {action}")
+
+
+    # def _validate_action_params(self, action):
+    #     """
+    #     验证解析出的动作及其参数是否有效。(最终重写版本 - 极简)
+    #     如果验证失败，则抛出 ValueError 或 TypeError。
+    #     """
+    #     action_type = action.get('type')
+    #
+    #     # 1. Validate 'type' field
+    #     if not action_type:
+    #         raise ValueError("Action missing 'type' field")
+    #     if not isinstance(action_type, str):
+    #         raise TypeError(f"Action 'type' field must be a string, got {type(action_type).__name__}")
+    #
+    #     # 2. Define known action types and their required parameters
+    #     # We will check types and optional params individually later
+    #     known_actions = {
+    #         "moveTo": {"x", "y", "z"},
+    #         "collect": {"blockType"},
+    #         "placeBlock": {"itemName", "x", "y", "z"},
+    #         "dig": {"x", "y", "z"},
+    #         "attack": {"target"},
+    #         "jumpAttack": {"target"},
+    #         "lookAt": {"x", "y", "z"},
+    #         "equip": {"itemName"},
+    #         "unequip": set(), # No required params, but known type
+    #         "useHeldItem": set(),
+    #         "craft": {"itemName"},
+    #         "chat": {"message"},
+    #         "setControlState": {"control", "state"},
+    #         "clearControlStates": set(),
+    #         "wait": set(), # No required params, but known type
+    #     }
+    #
+    #     # 3. Check if action type is known
+    #     if action_type not in known_actions:
+    #         raise ValueError(f"Unknown action type: '{action_type}'")
+    #
+    #     required_params_set = known_actions[action_type]
+    #     provided_params_set = set(action.keys()) - {'type'}
+    #
+    #     # 4. Check for missing required parameters
+    #     missing = required_params_set - provided_params_set
+    #     if missing:
+    #         raise ValueError(f"Action '{action_type}' missing required parameters: {', '.join(sorted(list(missing)))}")
+    #
+    #     # --- 5. Perform Simplified Type Checks (Individual Ifs) ---
+    #     # This section avoids a complex try-except block that seemed to cause issues.
+    #
+    #     # --- Coordinate Checks ---
+    #     if action_type in ["moveTo", "placeBlock", "dig", "lookAt"]:
+    #         for coord in ['x', 'y', 'z']:
+    #             val = action[coord]
+    #             if not isinstance(val, (int, float)):
+    #                 raise TypeError(f"Parameter '{coord}' must be a number, got {type(val).__name__}")
+    #             # Basic value check (optional, simplified)
+    #             # if isinstance(val, float) and (math.isnan(val) or math.isinf(val)):
+    #             #    raise ValueError(f"Parameter '{coord}' cannot be NaN or Infinity")
+    #
+    #     # --- String Checks (Required) ---
+    #     if action_type in ["attack", "jumpAttack"]:
+    #         val = action['target']
+    #         if not isinstance(val, str) or not val:
+    #             raise TypeError("Parameter 'target' must be a non-empty string")
+    #     elif action_type == "collect":
+    #         val = action['blockType']
+    #         if not isinstance(val, str) or not val:
+    #             raise TypeError("Parameter 'blockType' must be a non-empty string")
+    #     elif action_type in ["placeBlock", "equip", "craft"]:
+    #         val = action['itemName']
+    #         if not isinstance(val, str) or not val:
+    #             raise TypeError("Parameter 'itemName' must be a non-empty string")
+    #     elif action_type == "chat":
+    #         val = action['message']
+    #         if not isinstance(val, str): # Allowing empty string
+    #             raise TypeError("Parameter 'message' must be a string")
+    #     elif action_type == "setControlState":
+    #         val_control = action['control']
+    #         if not isinstance(val_control, str) or not val_control:
+    #             raise TypeError("Parameter 'control' must be a non-empty string")
+    #
+    #     # --- Boolean Check ---
+    #     if action_type == "setControlState":
+    #         val_state = action['state']
+    #         if not isinstance(val_state, bool):
+    #             raise TypeError("Parameter 'state' must be a boolean")
+    #
+    #     # --- Optional Param Checks (Simplified) ---
+    #     if "ticks" in action:
+    #         if action_type != "wait": raise ValueError("Parameter 'ticks' only valid for 'wait' action")
+    #         val_ticks = action['ticks']
+    #         if not isinstance(val_ticks, int): raise TypeError("'ticks' must be an integer")
+    #         if val_ticks < 0: raise ValueError("'ticks' cannot be negative")
+    #     if "count" in action:
+    #          if action_type not in ["collect", "craft"]: raise ValueError(f"'count' not valid for '{action_type}' action")
+    #          val_count = action['count']
+    #          if not isinstance(val_count, int): raise TypeError("'count' must be an integer")
+    #          if val_count <= 0: raise ValueError("'count' must be positive")
+    #     if "radius" in action:
+    #          if action_type != "collect": raise ValueError("'radius' only valid for 'collect' action")
+    #          val_radius = action['radius']
+    #          if not isinstance(val_radius, (int, float)): raise TypeError("'radius' must be a number")
+    #          if val_radius <= 0: raise ValueError("'radius' must be positive")
+    #     if "destination" in action:
+    #          if action_type not in ["equip", "unequip"]: raise ValueError(f"'destination' only valid for '{action_type}' action")
+    #          val_dest = action['destination']
+    #          if not isinstance(val_dest, str) or not val_dest: raise TypeError("'destination' must be a non-empty string")
+    #
+    #
+    #     # --- Check for Unknown Parameters ---
+    #     # Calculate all *potentially* allowed params based on type and optional checks
+    #     allowed_params_set = set(known_actions[action_type]) # Start with required
+    #     if action_type == "wait" and "ticks" in action: allowed_params_set.add("ticks")
+    #     if action_type == "collect":
+    #         if "count" in action: allowed_params_set.add("count")
+    #         if "radius" in action: allowed_params_set.add("radius")
+    #     if action_type == "craft" and "count" in action: allowed_params_set.add("count")
+    #     if action_type in ["equip", "unequip"] and "destination" in action: allowed_params_set.add("destination")
+    #
+    #     unknown = provided_params_set - allowed_params_set
+    #     if unknown:
+    #         # Log warning instead of error for unknown params to be less strict?
+    #         self.logger.warning(f"Action '{action_type}' received parameters not strictly defined for it: {', '.join(sorted(list(unknown)))}")
+    #         # raise ValueError(f"Action '{action_type}' received unknown parameters: {', '.join(sorted(list(unknown)))}")
+    #
+    #
+    #     # If we reached here without exceptions, the validation passed.
+    #     self.logger.debug(f"Action validation passed for: {action}")
+    #     # No explicit return True needed
     
     def get_status(self):
         """获取游戏状态"""
@@ -409,45 +779,53 @@ class MinecraftAgent:
             return None
     
     def load_config(self):
-        """加载配置文件"""
+        """加载配置文件 with error handling"""
+        # Use Path from pathlib
+        config_path = Path("config.json")
+        default_config = {
+            "deepseek_api_key": "",
+            "minecraft": {"host": "0.0.0.0", "port": 25565, "username": "AI", "version": "1.21.1"},
+            "server": {"port": 3002, "host": "localhost"},
+            "ai": {"steps": 100, "delay": 3, "api_key": ""}, # api_key likely needed here too
+            "vision": {"use_vision": True, "vision_model": "MobileNet"},
+            "gui": {"language": "zh"}
+        }
+        if not config_path.exists():
+            # Check parent directory as well, relative path might be tricky
+            alt_config_path = Path(__file__).parent.parent / "config.json" # Go up two levels from ai/
+            if alt_config_path.exists():
+                 config_path = alt_config_path
+            else:
+                self.logger.warning(f"config.json not found in standard location or project root, using default config.")
+                # Save default config in project root for user
+                try:
+                     # Save to project root instead of potentially volatile current dir
+                     save_path = Path(__file__).parent.parent / "config.json"
+                     with open(save_path, "w", encoding='utf-8') as f:
+                        json.dump(default_config, f, indent=2, ensure_ascii=False)
+                     self.logger.info(f"Saved default configuration to {save_path}")
+                except Exception as e:
+                     self.logger.error(f"Failed to save default config: {e}")
+                return default_config
+
         try:
-            # 尝试多个可能的配置文件位置
-            possible_paths = [
-                # 当前目录
-                "config.json",
-                # 可执行文件所在目录
-                os.path.join(os.path.dirname(sys.executable), "config.json"),
-                # 程序运行目录
-                os.path.join(os.getcwd(), "config.json")
-            ]
-            
-            for config_path in possible_paths:
-                if os.path.exists(config_path):
                     with open(config_path, "r", encoding='utf-8') as f:
-                        return json.load(f)
-                    
-            raise FileNotFoundError("找不到配置文件")
-        
+                loaded_config = json.load(f)
+                # Deep merge (simple version for expected structure)
+                merged_config = default_config.copy()
+                for key, value in loaded_config.items():
+                    if isinstance(value, dict) and key in merged_config and isinstance(merged_config[key], dict):
+                        # Recursively merge dictionaries (level 1 depth)
+                        merged_config[key] = {**merged_config[key], **value} # Python 3.5+ merge
+                    else:
+                        merged_config[key] = value
+                return merged_config
+        except json.JSONDecodeError as e:
+            self.logger.error(_("log_config_load_failed", error=f"Invalid JSON in config.json ({config_path}): {e}"))
+            return default_config
         except Exception as e:
-            self.logger.error(f"加载配置失败: {e}")
-            # 返回默认配置
-            return {
-                "deepseek_api_key": "",
-                "minecraft": {
-                    "host": "0.0.0.0",
-                    "port": 25565,
-                    "username": "AI",
-                    "version": "1.21.1"
-                },
-                "server": {
-                    "port": 3002,
-                    "host": "localhost"
-                },
-                "ai": {
-                    "steps": 100,
-                    "delay": 3
-                }
-            }
+            self.logger.error(_("log_config_load_failed", error=f"Error loading config ({config_path}): {e}"))
+            return default_config
     
     def _init_conversation(self):
         """初始化与DeepSeek的对话"""
@@ -455,20 +833,22 @@ class MinecraftAgent:
         self.deepseek.add_to_history("system", SYSTEM_PROMPT)
     
     def get_bot_status(self):
-        """获取机器人状态"""
+        """获取机器人状态 with error handling"""
         try:
-            response = requests.get(
-                f"{self.mc_api}/bot/status",
-                timeout=15  # 增加超时时间从5秒到15秒
-            )
-            
-            if response.status_code == 200:
+            response = requests.get(f"{self.mc_api}/bot/status", timeout=15)
+            response.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
                 return response.json()
-            else:
-                print(f"状态码: {response.status_code}, 错误信息: {response.text}")
+        except requests.exceptions.Timeout:
+            self.logger.warning("Timeout getting bot status.") # Internal log
                 return None
-        except Exception as e:
-            print(f"与机器人服务器通信失败: {e}")
+        except requests.exceptions.ConnectionError:
+            self.logger.warning("Connection error getting bot status.") # Internal log
+            return None
+        except requests.exceptions.RequestException as e:
+            self.logger.error(f"Error getting bot status: {e}") # Internal log
+            return None
+        except json.JSONDecodeError:
+             self.logger.error("Failed to decode JSON from bot status response.") # Internal log
             return None
     
     def send_action(self, action):
@@ -695,30 +1075,31 @@ class MinecraftAgent:
     
     def run(self, steps=None, delay=None):
         """运行AI代理"""
-        # 使用参数或配置文件中的值
         steps = steps or self.ai_config.get('steps', 100)
         delay = delay or self.ai_config.get('delay', 3)
         
-        print(f"启动Minecraft AI代理...")
-        print(f"学习系统状态: {'启用' if self.ai_config.get('learning_enabled', True) else '禁用'}")
+        self.logger.info(f"Starting Minecraft AI Agent for {steps} steps with {delay}s delay...")
+        self.logger.info(f"Learning System: {'Enabled' if self.ai_config.get('learning_enabled', True) else 'Disabled'}")
         
         try:
             for i in range(steps):
-                print(f"\n步骤 {i+1}/{steps}")
-                success = self.run_step()
-                
-                if not success:
-                    print("步骤执行失败，尝试恢复...")
-                    time.sleep(delay * 2)
-                
+                self.logger.info(f"--- Step {i+1}/{steps} ---")
+                step_result = self.step()
+
+                if not step_result or not step_result.get("success"):
+                    error_info = step_result.get('error', 'Unknown step failure') if step_result else 'Step returned None'
+                    self.logger.warning(f"Step {i+1} failed or did not succeed: {error_info}. Attempting to continue...")
+                    # Add a longer delay after a failure to allow recovery?
+                    time.sleep(delay * 1.5)
+                else:
                 time.sleep(delay)
                 
         except KeyboardInterrupt:
-            print("\n用户中断，停止AI代理")
+            self.logger.info("User interrupt detected, stopping AI agent.")
         except Exception as e:
-            print(f"运行时错误: {e}")
+            self.logger.critical(_("log_ai_error", error=f"CRITICAL RUNTIME ERROR: {e}"))
         finally:
-            print("AI代理已停止")
+            self.logger.info("Minecraft AI Agent stopped.")
             
     def set_task(self, task_key):
         """设置当前任务"""
@@ -1206,6 +1587,71 @@ class MinecraftAgent:
         except Exception:
             # 如果出现任何错误，返回False
             return False
+
+    def generate_text_prompt(self, bot_state):
+         """生成仅包含文本的提示词部分"""
+         state_info = f"""
+当前状态:
+- 位置: {bot_state.get('position', 'unknown')}
+- 生命值: {bot_state.get('health', 'unknown')}
+- 饥饿值: {bot_state.get('food', 'unknown')}
+- 背包: {self._format_inventory(bot_state.get('inventory', []))}
+- 附近实体: {self._format_entities(bot_state.get('nearbyEntities', []))}
+- 附近方块: {self._format_blocks(bot_state.get('nearbyBlocks', []))}
+- 最近聊天: {self._format_chats(bot_state.get('recentChats', []))}
+"""
+         # 获取最近的记忆
+         recent_memories = self.memory.get_recent_memories(5)
+         memory_text = ""
+         if recent_memories:
+             memory_text = "\n最近的行动:\n" + "\n".join([
+                f"- 动作: {mem.get('action', 'N/A')}, 结果: {mem.get('result', 'N/A')}"
+                for mem in recent_memories
+             ])
+
+         task_description = TASKS.get(self.current_task, "根据环境自主决定行动")
+
+         text_prompt = f"""
+当前任务：{self.current_task} - {task_description}
+
+{state_info}
+{memory_text}
+
+请根据当前状态、任务和视觉信息（如果提供），生成下一步行动。必须返回一个JSON对象。
+可用的动作类型有：move, collect, craft, place, dig, equip, attack, chat, look。
+请直接返回JSON对象，不要添加其他文本或格式。
+"""
+         return text_prompt
+
+    # Helper function to format inventory
+    def _format_inventory(self, inventory):
+        if not inventory: return "空"
+        items = {}
+        for item in inventory:
+            name = item.get('name', 'unknown')
+            count = item.get('count', 0)
+            if name != 'unknown' and count > 0 :
+                 items[name] = items.get(name, 0) + count
+        return ", ".join([f"{name}({count})" for name, count in items.items()]) if items else "空"
+
+    # Helper function to format entities
+    def _format_entities(self, entities):
+        if not entities: return "无"
+        return ", ".join([f"{e.get('name', 'unknown')}({e.get('type','?')}, dist:{e.get('distance', 0):.1f})" for e in entities[:5]]) # Limit to 5
+
+    # Helper function to format blocks
+    def _format_blocks(self, blocks):
+        if not blocks: return "无"
+        # 合并相同类型的方块，并显示距离最近的一个
+        block_info = {}
+        for block in blocks:
+            name = block.get('name', 'unknown')
+            if name != 'unknown':
+                 dist = block.get('distance', float('inf'))
+                 if name not in block_info or dist < block_info[name][1]:
+                      block_info[name] = (block_info.get(name, (0, float('inf')))[0] + 1, dist)
+
+        return ", ".join([f"{name}({count}, nearest:{dist:.1f})" for name, (count, dist) in block_info.items()])
 
 class AIThread(threading.Thread):
     """AI控制线程"""

@@ -1,22 +1,22 @@
 {
   "deepseek_api_key": "",
   "minecraft": {
-    "host": "0.0.0.0",
+    "host": "localhost",
     "port": 25565,
-    "username": "AI",
+    "username": "AI_Player",
     "version": "1.21.1",
     "viewDistance": 8,
-    "chatLengthLimit": 101,
+    "chatLengthLimit": 100,
     "autoReconnect": true,
     "reconnectDelay": 5000
   },
   "ai": {
     "api_key": "",
-    "initial_task": "2. \u6536\u96c6\u8d44\u6e90",
+    "initial_task": "3. \u5efa\u9020\u623f\u5c4b",
     "steps": 100,
-    "delay": 1,
+    "delay": 2,
     "temperature": 0.7,
-    "max_tokens": 4096,
+    "max_tokens": 2048,
     "memory_capacity": 20,
     "learning_enabled": true
   },

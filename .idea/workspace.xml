@@ -4,28 +4,8 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="a023b3f2-5708-4f15-a0fb-dd5e2b629ff8" name="更改" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai/agent.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai/agent.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai/deepseek_api.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai/deepseek_api.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai/learning.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai/learning.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/ai/prompts.py" beforeDir="false" afterPath="$PROJECT_DIR$/ai/prompts.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/bot/actions.js" beforeDir="false" afterPath="$PROJECT_DIR$/bot/actions.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/bot/index.js" beforeDir="false" afterPath="$PROJECT_DIR$/bot/index.js" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/bot/knowledge.json" beforeDir="false" afterPath="$PROJECT_DIR$/bot/knowledge.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/bot/node_modules/.package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/bot/node_modules/.package-lock.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/bot/package-lock.json" beforeDir="false" afterPath="$PROJECT_DIR$/bot/package-lock.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/bot/package.json" beforeDir="false" afterPath="$PROJECT_DIR$/bot/package.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/build.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/build_resources.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/config.json" beforeDir="false" afterPath="$PROJECT_DIR$/config.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/gui/config.json" beforeDir="false" afterPath="$PROJECT_DIR$/gui/config.json" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/gui/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/gui/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/gui/main_window.py" beforeDir="false" afterPath="$PROJECT_DIR$/gui/main_window.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/run.py" beforeDir="false" afterPath="$PROJECT_DIR$/run.py" afterDir="false" />
+    <list default="true" id="a023b3f2-5708-4f15-a0fb-dd5e2b629ff8" name="更改" comment="删除文件 MinecraftAI.spec">
+      <change beforePath="$PROJECT_DIR$/../test_connection.py" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -33,7 +13,12 @@
     <option name="LAST_RESOLUTION" value="IGNORE" />
   </component>
   <component name="Git.Settings">
-    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
+    <option name="RECENT_BRANCH_BY_REPOSITORY">
+      <map>
+        <entry key="$PROJECT_DIR$" value="master" />
+      </map>
+    </option>
+    <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$/.." />
   </component>
   <component name="GitHubPullRequestSearchHistory">{
   &quot;lastFilter&quot;: {
@@ -75,17 +60,19 @@
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
     &quot;git-widget-placeholder&quot;: &quot;master&quot;,
-    &quot;last_opened_file_path&quot;: &quot;C:/Users/xiyu/Desktop/MinecraftAI/resources&quot;,
-    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;
+    &quot;last_opened_file_path&quot;: &quot;C:/Users/xiyu/Desktop/MinecraftAI/Minecraft_AI&quot;,
+    &quot;settings.editor.selected.configurable&quot;: &quot;project.propVCSSupport.DirectoryMappings&quot;
   }
 }</component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
+      <recent name="C:\Users\xiyu\Desktop\MinecraftAI\Minecraft_AI\bot" />
       <recent name="C:\Users\xiyu\Desktop\MinecraftAI\resources" />
       <recent name="C:\Users\xiyu\Desktop\MinecraftAI\借鉴" />
       <recent name="C:\Users\xiyu\Desktop\MinecraftAI" />
     </key>
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\xiyu\Desktop\MinecraftAI\Minecraft_AI" />
       <recent name="C:\Users\xiyu\Desktop\MinecraftAI\resources" />
     </key>
   </component>
@@ -105,6 +92,46 @@
       <option name="presentableId" value="Default" />
       <updated>1741729542208</updated>
     </task>
+    <task id="LOCAL-00001" summary="删除文件 MinecraftAI.spec">
+      <option name="closed" value="true" />
+      <created>1744317588286</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1744317588286</updated>
+    </task>
+    <task id="LOCAL-00002" summary="删除文件 MinecraftAI.spec">
+      <option name="closed" value="true" />
+      <created>1744318163148</created>
+      <option name="number" value="00002" />
+      <option name="presentableId" value="LOCAL-00002" />
+      <option name="project" value="LOCAL" />
+      <updated>1744318163148</updated>
+    </task>
+    <task id="LOCAL-00003" summary="删除文件 MinecraftAI.spec">
+      <option name="closed" value="true" />
+      <created>1744319138269</created>
+      <option name="number" value="00003" />
+      <option name="presentableId" value="LOCAL-00003" />
+      <option name="project" value="LOCAL" />
+      <updated>1744319138269</updated>
+    </task>
+    <option name="localTasksCounter" value="4" />
     <servers />
+  </component>
+  <component name="Vcs.Log.Tabs.Properties">
+    <option name="TAB_STATES">
+      <map>
+        <entry key="MAIN">
+          <value>
+            <State />
+          </value>
+        </entry>
+      </map>
+    </option>
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="删除文件 MinecraftAI.spec" />
+    <option name="LAST_COMMIT_MESSAGE" value="删除文件 MinecraftAI.spec" />
   </component>
 </project>
