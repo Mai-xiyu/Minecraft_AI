@@ -3,7 +3,7 @@
 一个基于本地大语言模型的 Minecraft AI 代理系统，能够在 Minecraft 中自主执行各种任务。AI 代理可以使用本地 DeepSeek-1.5b 模型或 DeepSeek API 进行决策，通过模式识别和缓存系统来提高效率，并具有完整的记忆系统来学习和改进行为。(明知是史，为何不避¿) 
  A Minecraft AI agent system based on local large language models, capable of autonomously performing various tasks in Minecraft. The AI agent can use local DeepSeek-1.5b models or the DeepSeek API for decision-making, leveraging pattern recognition and caching systems for improved efficiency, and features a complete memory system for learning and behavior refinement.
 
-作者 | Author：Mai-xiyu(Mai-xiyu)  
+作者 | Author：Mai-xiyu(Mai-xiyu⎮Mai-xiyu)  
 邮箱 | Email：maixiyumc@gmail.com  
 版本 | Version：v1.2.7
 
