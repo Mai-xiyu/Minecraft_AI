@@ -7,6 +7,12 @@
 邮箱 | Email：maixiyumc@gmail.com  
 版本 | Version：v1.2.7
 
+
+## 思维导图 ⎮ Mind Map
+![Minecraft AI 控制核心逻辑](mindmapcn.png)
+![Minecraft AI core control logic](mindmapen.png)
+
+
 ## 主要特性 | Key Features
 
 - 支持本地 DeepSeek-1.5b 模型或 DeepSeek API | Supports local DeepSeek-1.5b model or DeepSeek API
