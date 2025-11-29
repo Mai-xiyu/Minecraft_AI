@@ -7,7 +7,7 @@
 邮箱 | Email：mai_xiyu@vip.qq.com  
 版本 | Version：v1.2.7
 
-
+## 等我挑个时间重写该项目
 ## 思维导图 ⎮ Mind Map
 ![Minecraft AI 控制核心逻辑](mindmapcn.png)
 ![Minecraft AI core control logic](mindmapen.png)
