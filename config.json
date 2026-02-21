@@ -1,31 +1,30 @@
 {
-  "deepseek_api_key": "",
   "minecraft": {
-    "host": "localhost",
+    "host": "127.0.0.1",
     "port": 25565,
     "username": "AI_Player",
-    "version": "1.21.1",
+    "version": "1.20.1",
     "viewDistance": 8,
     "chatLengthLimit": 100,
     "autoReconnect": true,
     "reconnectDelay": 5000
   },
-  "ai": {
-    "api_key": "",
-    "initial_task": "3. \u5efa\u9020\u623f\u5c4b",
-    "steps": 100,
-    "delay": 2,
-    "temperature": 0.7,
-    "max_tokens": 2048,
-    "memory_capacity": 20,
-    "learning_enabled": true
-  },
   "server": {
     "host": "localhost",
     "port": 3002
   },
-  "vision": {
-    "use_vision": true,
-    "vision_model": "ResNet18"
+  "ai": {
+    "api_key": "sk-",
+    "base_url": "https://api.moonshot.cn/v1",
+    "model": "kimi-k2-turbo-preview",
+    "initial_task": "",
+    "delay": 2,
+    "temperature": 0.7,
+    "max_tokens": 2048,
+    "use_cache": true,
+    "use_prediction": true
+  },
+  "gui": {
+    "language": "zh"
   }
 }

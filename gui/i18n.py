@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import weakref
 from collections import defaultdict
 
 # Try to import PyQt components needed for type checking (at top level)
@@ -45,20 +46,37 @@ translations = {
         "status_connected": "Connected",
         "status_connection_failed": "Connection Failed",
         "status_bot_not_started": "Not Started",
+        "status_bot_starting": "Starting...",
         "status_bot_running": "Running",
         "status_bot_stopping": "Stopping...",
         "status_bot_stopped": "Stopped",
         "status_bot_error": "Error",
+        "status_empty_inventory": "(empty)",
+
+        # Control Panel - Bot Server Buttons
+        "start_bot_button": "Start Bot",
+        "stop_bot_button": "Stop Bot",
+
+        # Control Panel - Bot Info Panel
+        "bot_info_group": "Bot Real-time Status",
+        "bot_health_label": "Health:",
+        "bot_food_label": "Hunger:",
+        "bot_position_label": "Position:",
+        "bot_inventory_label": "Inventory:",
 
         # Control Panel - Buttons
         "start_ai_button": "Start AI",
         "stop_ai_button": "Stop AI",
         "test_connection_button": "Test Connection",
+        "test_llm_button": "Test LLM",
         "sync_config_button": "Sync Config",
-        "download_models_button": "Download Vision Models",
 
         # Control Panel - Log Group
         "log_group": "System Log",
+
+        # Control Panel - Runtime Task
+        "runtime_task_placeholder": "Enter new task...",
+        "change_task_button": "Change Task",
 
         # Control Panel - Chat Group
         "chat_group": "Chat",
@@ -87,27 +105,19 @@ translations = {
         # Config Panel - AI Group
         "ai_group": "AI Settings",
         "api_key_label": "API Key:",
+        "base_url_label": "API Base URL:",
+        "model_label": "Model:",
         "initial_task_label": "Initial Task:",
         "save_task_button": "Save",
         "save_task_tooltip": "Save current task to presets",
-        "steps_label": "Execution Steps:",
         "delay_label": "Step Delay (sec):",
         "temperature_label": "Temperature:",
         "max_tokens_label": "Max Tokens:",
-        "ai_options_group": "AI Options",
-        "use_local_model_checkbox": "Use Local Model",
+        "ai_options_label": "AI Options:",
         "use_cache_checkbox": "Enable Cache",
         "use_prediction_checkbox": "Enable Prediction",
 
-        # Config Panel - Vision Group
-        "vision_group": "Vision System",
-        "use_vision_checkbox": "Enable Vision:", # Label for the checkbox row
-        "vision_model_label": "Vision Model:",
-        "vision_model_resnet": "ResNet18 (18M Params|44MB|GPU Recommended)",
-        "vision_model_mobilenet": "MobileNet (4M Params|14MB|Mobile/CPU)",
-        "vision_model_custom": "Custom Model (Import professional models)",
-
-        # Config Panel - Language Selection (New)
+        # Config Panel - Language Selection
         "language_label": "Language:",
 
         # Sponsor Page
@@ -125,7 +135,7 @@ translations = {
         "log_config_save_failed": "Failed to save configuration: {error}",
         "log_default_config_created": "Configuration file not found, creating default configuration",
         "log_test_connection_started": "Testing connection...",
-        "log_test_connection_result": "Connection test {result}", # result will be 'successful' or 'failed'
+        "log_test_connection_result": "Connection test {result}",
         "log_test_connection_success": "successful",
         "log_test_connection_failure": "failed",
         "log_sync_config_started": "Syncing configuration to bot server...",
@@ -136,6 +146,10 @@ translations = {
 2. Navigate to: {bot_dir}
 3. Run command: npm install
 4. Run command: npm start""",
+        "log_bot_starting": "Starting bot server...",
+        "log_bot_stopping": "Stopping bot server...",
+        "log_bot_ready": "Bot server is ready",
+        "log_bot_already_running": "Bot server is already running",
         "log_ai_starting": "Starting AI...",
         "log_ai_start_failed": "Failed to start AI: {error}",
         "log_ai_started": "AI started",
@@ -145,26 +159,37 @@ translations = {
         "log_ai_completed": "AI finished execution",
         "log_ai_step": "Executing step {step}/{total}",
         "log_ai_error": "AI execution error: {error}",
+        "log_ai_exception": "AI execution exception: {error}",
+        "log_ai_step_detail": "Step {step} [{status}]{action}{error}",
+        "log_step_success": "Success",
+        "log_step_failure": "Failure",
+        "log_step_action": " | Action: {type}",
+        "log_step_error": " | Error: {err}",
+        "log_bot_waiting": "Waiting for bot server to be ready...",
+        "log_bot_wait_timeout": "Timed out waiting for bot server",
+        "log_task_changed": "Task changed to: {task}",
+        "log_ai_not_running": "AI not running, cannot change task",
+        "log_ai_auto_paused": "AI auto-paused: {reason}",
+        "log_ai_step_infinite": "Step {step} [{status}]{action}{error}",
+        "log_sync_started": "Syncing config...",
+        "log_sync_done": "Config synced",
+        "status_ai_paused": "Paused",
         "log_custom_task_saved": "Custom task saved: {task}",
         "log_custom_task_save_failed": "Failed to save custom task: {error}",
         "log_load_custom_tasks_failed": "Failed to load custom tasks: {error}",
-        "log_download_vision_models_started": "Starting vision model download...",
-        "log_download_vision_models_finished": "All vision models downloaded!",
-        "log_download_vision_model_downloading": "Downloading model: {model_name}",
-        "log_download_vision_model_saved": "Model saved to: {local_path}",
-        "log_download_vision_models_error": "Error downloading models: {error}",
         "log_get_bot_status_failed": "Failed to get bot status: {error}",
         "log_send_action_failed": "Failed to send action: {error}",
         "log_server_connection_failed_retrying": "Connection failed, retrying in 2 seconds... ({attempt}/{max_attempts})",
         "log_server_connection_success": "Successfully connected to bot server",
         "log_connecting_to_server": "Connecting to {url}...",
         "log_connection_error": "Connection error: {error}",
-        "log_vision_system_init_failed": "Vision system initialization failed: {error}",
-        "log_vision_system_init_warning": "Vision system initialized in degraded mode",
-        "log_vision_get_frame_failed": "Failed to get vision frame: {error}",
 
         # Dialogs
         "error_dialog_title": "Error",
+        "llm_test_no_key": "Please enter an API Key first.",
+        "llm_test_started": "Testing LLM connection...",
+        "llm_test_success_title": "LLM Connection OK",
+        "llm_test_fail_title": "LLM Connection Failed",
     },
     "zh": {
         # Main Window Titles & Tabs
@@ -183,20 +208,37 @@ translations = {
         "status_connected": "已连接",
         "status_connection_failed": "连接失败",
         "status_bot_not_started": "未启动",
+        "status_bot_starting": "正在启动...",
         "status_bot_running": "运行中",
         "status_bot_stopping": "正在停止...",
         "status_bot_stopped": "已停止",
         "status_bot_error": "错误",
+        "status_empty_inventory": "(空)",
+
+        # Control Panel - Bot Server Buttons
+        "start_bot_button": "启动Bot",
+        "stop_bot_button": "停止Bot",
+
+        # Control Panel - Bot Info Panel
+        "bot_info_group": "机器人实时状态",
+        "bot_health_label": "生命值:",
+        "bot_food_label": "饥饿值:",
+        "bot_position_label": "位置:",
+        "bot_inventory_label": "物品栏:",
 
         # Control Panel - Buttons
         "start_ai_button": "启动AI",
         "stop_ai_button": "停止AI",
         "test_connection_button": "测试连接",
+        "test_llm_button": "测试LLM",
         "sync_config_button": "同步配置",
-        "download_models_button": "下载视觉模型",
 
         # Control Panel - Log Group
         "log_group": "系统日志",
+
+        # Control Panel - Runtime Task
+        "runtime_task_placeholder": "输入新任务...",
+        "change_task_button": "切换任务",
 
         # Control Panel - Chat Group
         "chat_group": "聊天",
@@ -225,27 +267,19 @@ translations = {
         # Config Panel - AI Group
         "ai_group": "AI设置",
         "api_key_label": "API密钥:",
+        "base_url_label": "API Base URL:",
+        "model_label": "模型:",
         "initial_task_label": "初始任务:",
         "save_task_button": "保存",
         "save_task_tooltip": "保存当前任务到预设列表",
-        "steps_label": "执行步数:",
         "delay_label": "步骤延迟(秒):",
         "temperature_label": "温度:",
         "max_tokens_label": "最大令牌数:",
-        "ai_options_group": "AI选项",
-        "use_local_model_checkbox": "使用本地模型",
+        "ai_options_label": "AI选项:",
         "use_cache_checkbox": "启用缓存",
         "use_prediction_checkbox": "启用预测",
 
-        # Config Panel - Vision Group
-        "vision_group": "视觉系统",
-        "use_vision_checkbox": "启用视觉:", # 复选框行的标签
-        "vision_model_label": "视觉模型:",
-        "vision_model_resnet": "ResNet18 (18M参数|44MB|推荐GPU)",
-        "vision_model_mobilenet": "MobileNet (4M参数|14MB|手机/CPU)",
-        "vision_model_custom": "自定义模型 (可导入专业模型)",
-
-        # Config Panel - Language Selection (New)
+        # Config Panel - Language Selection
         "language_label": "语言:",
 
         # Sponsor Page
@@ -263,7 +297,7 @@ translations = {
         "log_config_save_failed": "保存配置失败: {error}",
         "log_default_config_created": "未找到配置文件，创建默认配置",
         "log_test_connection_started": "正在测试连接...",
-        "log_test_connection_result": "连接测试{result}", # result 会是 '成功' 或 '失败'
+        "log_test_connection_result": "连接测试{result}",
         "log_test_connection_success": "成功",
         "log_test_connection_failure": "失败",
         "log_sync_config_started": "正在同步配置到机器人服务器...",
@@ -274,6 +308,10 @@ translations = {
 2. 进入目录: {bot_dir}
 3. 执行命令: npm install
 4. 执行命令: npm start""",
+        "log_bot_starting": "正在启动Bot服务器...",
+        "log_bot_stopping": "正在停止Bot服务器...",
+        "log_bot_ready": "Bot服务器已就绪",
+        "log_bot_already_running": "Bot服务器已在运行中",
         "log_ai_starting": "正在启动AI...",
         "log_ai_start_failed": "启动AI失败: {error}",
         "log_ai_started": "AI已启动",
@@ -283,26 +321,37 @@ translations = {
         "log_ai_completed": "AI已完成运行",
         "log_ai_step": "执行步骤 {step}/{total}",
         "log_ai_error": "AI执行错误: {error}",
+        "log_ai_exception": "AI执行异常: {error}",
+        "log_ai_step_detail": "步骤 {step} [{status}]{action}{error}",
+        "log_step_success": "成功",
+        "log_step_failure": "失败",
+        "log_step_action": " | 动作: {type}",
+        "log_step_error": " | 错误: {err}",
+        "log_bot_waiting": "等待Bot服务器就绪...",
+        "log_bot_wait_timeout": "等待Bot服务器超时",
+        "log_task_changed": "任务已切换为: {task}",
+        "log_ai_not_running": "AI未运行, 无法切换任务",
+        "log_ai_auto_paused": "AI已自动暂停: {reason}",
+        "log_ai_step_infinite": "步骤 {step} [{status}]{action}{error}",
+        "log_sync_started": "正在同步配置...",
+        "log_sync_done": "配置已同步",
+        "status_ai_paused": "已暂停",
         "log_custom_task_saved": "自定义任务已保存: {task}",
         "log_custom_task_save_failed": "保存自定义任务失败: {error}",
         "log_load_custom_tasks_failed": "加载自定义任务失败: {error}",
-        "log_download_vision_models_started": "开始下载视觉模型...",
-        "log_download_vision_models_finished": "所有视觉模型下载完成!",
-        "log_download_vision_model_downloading": "下载模型: {model_name}",
-        "log_download_vision_model_saved": "模型已保存到: {local_path}",
-        "log_download_vision_models_error": "下载模型时出错: {error}",
         "log_get_bot_status_failed": "获取机器人状态失败: {error}",
         "log_send_action_failed": "发送动作失败: {error}",
         "log_server_connection_failed_retrying": "连接失败，2秒后重试... ({attempt}/{max_attempts})",
         "log_server_connection_success": "成功连接到机器人服务器",
         "log_connecting_to_server": "尝试连接到 {url}...",
         "log_connection_error": "连接错误: {error}",
-        "log_vision_system_init_failed": "视觉系统初始化失败: {error}",
-        "log_vision_system_init_warning": "视觉系统初始化为降级模式",
-        "log_vision_get_frame_failed": "获取视觉帧失败: {error}",
 
         # Dialogs
         "error_dialog_title": "错误",
+        "llm_test_no_key": "请先填写 API Key。",
+        "llm_test_started": "正在测试 LLM 连接...",
+        "llm_test_success_title": "LLM 连接成功",
+        "llm_test_fail_title": "LLM 连接失败",
     }
 }
 
@@ -356,11 +405,10 @@ def register_widget(widget, key, attr="text", **kwargs):
     translatable_widgets.append({"widget": widget, "key": key, "attr": attr, "kwargs": kwargs})
 
 def update_ui_texts():
-    """更新所有已注册控件的文本"""
-    if not PYQT_AVAILABLE: return # Don't proceed if PyQt is not available
+    """更新所有已注册控件的文本, 自动清理已销毁控件"""
+    if not PYQT_AVAILABLE: return
 
-    # print(f"Updating UI texts for language: {current_language}. Widgets registered: {len(translatable_widgets)}")
-
+    alive = []
     for item in translatable_widgets:
         widget = item["widget"]
         key = item["key"]
@@ -370,12 +418,18 @@ def update_ui_texts():
 
         try:
             if widget is None:
-                # print(f"警告：键 '{key}' 的控件为 None，跳过更新。")
                 continue
 
+            # 检查 Qt 控件是否已被销毁
+            try:
+                widget.objectName()
+            except RuntimeError:
+                # wrapped C/C++ object has been deleted
+                continue
+
+            alive.append(item)
             updated = False
             widget_type_name = type(widget).__name__
-            # print(f"Attempting to update: {widget_type_name} (Key: {key}, Attr: {attr})")
 
             # Check specific attribute/method combinations
             if attr == "tabText" and isinstance(widget, QTabWidget) and hasattr(widget, 'setTabText'):
@@ -408,6 +462,9 @@ def update_ui_texts():
 
         except Exception as e:
             print(f"更新控件文本时出错 键 '{key}' (控件: {widget_type_name}, 属性: {attr}): {e}")
+
+    # 清理已销毁的控件引用
+    translatable_widgets[:] = alive
 
 def get_current_language():
     """获取当前设置的语言"""

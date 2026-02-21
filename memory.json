@@ -1,0 +1,132 @@
+{
+  "memories": [
+    {
+      "task": "",
+      "action": {
+        "type": "collect",
+        "blockType": "stone",
+        "count": 1
+      },
+      "result": false,
+      "summary": "collect -> 失败",
+      "timestamp": 1771715099.3792772
+    },
+    {
+      "task": "",
+      "action": {
+        "type": "collect",
+        "blockType": "grass_block",
+        "count": 3
+      },
+      "result": true,
+      "summary": "collect -> 成功",
+      "timestamp": 1771716143.1454523
+    },
+    {
+      "task": "",
+      "action": {
+        "type": "collect",
+        "blockType": "oak_log",
+        "count": 8
+      },
+      "result": false,
+      "summary": "collect -> 失败",
+      "timestamp": 1771716176.7765334
+    },
+    {
+      "task": "",
+      "action": {
+        "type": "craft",
+        "itemName": "crafting_table"
+      },
+      "result": false,
+      "summary": "craft -> 失败",
+      "timestamp": 1771716179.546914
+    },
+    {
+      "task": "",
+      "action": {
+        "type": "craft",
+        "itemName": "crafting_table"
+      },
+      "result": false,
+      "summary": "craft -> 失败",
+      "timestamp": 1771716181.551235
+    },
+    {
+      "task": "",
+      "action": {
+        "type": "craft",
+        "itemName": "crafting_table"
+      },
+      "result": false,
+      "summary": "craft -> 失败",
+      "timestamp": 1771716183.5555618
+    },
+    {
+      "task": "",
+      "action": {
+        "type": "craft",
+        "itemName": "crafting_table"
+      },
+      "result": false,
+      "summary": "craft -> 失败",
+      "timestamp": 1771716185.5599196
+    },
+    {
+      "task": "",
+      "action": {
+        "type": "collect",
+        "blockType": "item",
+        "radius": 6
+      },
+      "result": false,
+      "summary": "collect -> 失败",
+      "timestamp": 1771716391.7545254
+    },
+    {
+      "task": "自由发育",
+      "action": {
+        "type": "collect",
+        "blockType": "item",
+        "radius": 6
+      },
+      "result": false,
+      "summary": "collect -> 失败",
+      "timestamp": 1771716394.3818316
+    },
+    {
+      "task": "自由发育",
+      "action": {
+        "type": "collect",
+        "blockType": "item",
+        "radius": 6
+      },
+      "result": false,
+      "summary": "collect -> 失败",
+      "timestamp": 1771716396.3862321
+    },
+    {
+      "task": "自由发育",
+      "action": {
+        "type": "collect",
+        "blockType": "item",
+        "radius": 6
+      },
+      "result": false,
+      "summary": "collect -> 失败",
+      "timestamp": 1771716398.3904004
+    },
+    {
+      "task": "自由发育",
+      "action": {
+        "type": "collect",
+        "blockType": "item",
+        "radius": 6
+      },
+      "result": false,
+      "summary": "collect -> 失败",
+      "timestamp": 1771716400.3946552
+    }
+  ]
+}

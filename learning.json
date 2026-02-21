@@ -1,0 +1,170 @@
+{
+  "action_outcomes": {
+    "collect_763f062d": [
+      {
+        "success": false,
+        "timestamp": 1771715099.3793406
+      }
+    ],
+    "collect_c5c0b053": [
+      {
+        "success": true,
+        "timestamp": 1771716143.1454892
+      }
+    ],
+    "collect_1411a5cd": [
+      {
+        "success": false,
+        "timestamp": 1771716176.7765672
+      }
+    ],
+    "craft_552dea97": [
+      {
+        "success": false,
+        "timestamp": 1771716179.546942
+      },
+      {
+        "success": false,
+        "timestamp": 1771716181.551257
+      },
+      {
+        "success": false,
+        "timestamp": 1771716183.555583
+      },
+      {
+        "success": false,
+        "timestamp": 1771716185.5599406
+      }
+    ],
+    "collect_632314a7": [
+      {
+        "success": false,
+        "timestamp": 1771716391.7545576
+      },
+      {
+        "success": false,
+        "timestamp": 1771716394.381856
+      },
+      {
+        "success": false,
+        "timestamp": 1771716396.3864477
+      },
+      {
+        "success": false,
+        "timestamp": 1771716398.3904243
+      },
+      {
+        "success": false,
+        "timestamp": 1771716400.3946788
+      }
+    ]
+  },
+  "successful_strategies": [
+    {
+      "action": {
+        "type": "collect",
+        "blockType": "grass_block",
+        "count": 3
+      },
+      "result_success": true,
+      "timestamp": 1771716143.1454895
+    }
+  ],
+  "failed_strategies": [
+    {
+      "action": {
+        "type": "collect",
+        "blockType": "stone",
+        "count": 1
+      },
+      "result_success": false,
+      "timestamp": 1771715099.379341
+    },
+    {
+      "action": {
+        "type": "collect",
+        "blockType": "oak_log",
+        "count": 8
+      },
+      "result_success": false,
+      "timestamp": 1771716176.7765675
+    },
+    {
+      "action": {
+        "type": "craft",
+        "itemName": "crafting_table"
+      },
+      "result_success": false,
+      "timestamp": 1771716179.5469422
+    },
+    {
+      "action": {
+        "type": "craft",
+        "itemName": "crafting_table"
+      },
+      "result_success": false,
+      "timestamp": 1771716181.5512571
+    },
+    {
+      "action": {
+        "type": "craft",
+        "itemName": "crafting_table"
+      },
+      "result_success": false,
+      "timestamp": 1771716183.555583
+    },
+    {
+      "action": {
+        "type": "craft",
+        "itemName": "crafting_table"
+      },
+      "result_success": false,
+      "timestamp": 1771716185.5599406
+    },
+    {
+      "action": {
+        "type": "collect",
+        "blockType": "item",
+        "radius": 6
+      },
+      "result_success": false,
+      "timestamp": 1771716391.7545583
+    },
+    {
+      "action": {
+        "type": "collect",
+        "blockType": "item",
+        "radius": 6
+      },
+      "result_success": false,
+      "timestamp": 1771716394.3818562
+    },
+    {
+      "action": {
+        "type": "collect",
+        "blockType": "item",
+        "radius": 6
+      },
+      "result_success": false,
+      "timestamp": 1771716396.386448
+    },
+    {
+      "action": {
+        "type": "collect",
+        "blockType": "item",
+        "radius": 6
+      },
+      "result_success": false,
+      "timestamp": 1771716398.3904245
+    },
+    {
+      "action": {
+        "type": "collect",
+        "blockType": "item",
+        "radius": 6
+      },
+      "result_success": false,
+      "timestamp": 1771716400.3946793
+    }
+  ]
+}
