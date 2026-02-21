@@ -1,11 +1,10 @@
 {
   "name": "minecraft-ai-bot",
-  "version": "1.2.0",
+  "version": "2.0.0",
   "description": "Minecraft AI Bot",
   "main": "index.js",
   "scripts": {
-    "start": "node --max-http-header-size=16384 --max-old-space-size=4096 index.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
   "author": "饩雨(God_xiyu)",
   "license": "ISC",
@@ -17,13 +16,9 @@
     "mineflayer-collectblock": "^1.4.1",
     "mineflayer-pathfinder": "^2.4.5",
     "mineflayer-tool": "^1.2.0",
-    "prismarine-viewer": "^1.27.0",
     "vec3": "^0.1.8"
   },
   "engines": {
     "node": ">=14.0.0"
-  },
-  "optionalDependencies": {
-    "canvas": "^2.11.2"
   }
 }

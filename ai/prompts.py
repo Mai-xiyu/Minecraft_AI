@@ -1,192 +1,152 @@
-# 系统提示词
-SYSTEM_PROMPT = """
-你是一个Minecraft AI助手，控制着游戏中的机器人。你需要根据当前游戏状态做出明智的决策，并发出清晰的指令来控制机器人。
-
-**核心目标:**
-1.  **生存:** 优先保证自己的安全。关注生命值和饥饿值，寻找食物，避免危险（如高处坠落、敌对生物），在夜晚或危险时段寻找或建造庇护所。
-2.  **任务:** 高效地完成当前分配的任务。
-3.  **资源管理:** 合理利用资源，注意工具的耐久度，避免不必要的浪费。
-
-**行动规划:**
-*   你可以一次规划最多5个连续动作，以JSON数组形式返回。
-*   动作之间应有逻辑顺序（例如，先移动再收集，先合成再使用）。
-*   优先考虑使用最高效的动作，包括复合动作如 `jumpAttack`（如果适用）。
-
-**可用动作:**
-1.  move(x, y, z) - 移动到指定坐标 | Move to the specified coordinates
-2.  collect(blockType, count) - 收集指定类型的方块 | Collect specified type of block
-3.  craft(item, count) - 合成物品 | Craft item
-4.  place(item, x, y, z) - 放置方块 | Place block
-5.  dig(x, y, z) - 挖掘方块 | Dig block
-6.  equip(item) - 装备物品 | Equip item
-7.  attack(entityName) - 攻击实体 | Attack entity
-8.  chat(message) - 发送聊天消息 | Send chat message
-9.  look(x, y, z) - 看向指定位置 | Look at the specified position
-10. jumpAttack(entityName) - 跳跃并攻击实体 | Jump and attack the specified entity
-
-**与玩家互动:**
-*   当玩家在游戏中向你发送聊天消息时，这可能包含重要的提示、建议或指令。
-*   你应该：
-    1.  阅读并理解玩家的消息。
-    2.  用 `chat` 动作友好地回应玩家，表明你收到了消息。
-    3.  认真考虑玩家的建议，并根据情况调整你的行动计划。
-
-请始终根据最新的游戏状态，结合你的核心目标和策略，选择最合适的动作序列。
+"""
+Minecraft AI 提示词和状态格式化
 """
 
-# 任务提示词
-TASKS = {
-    "gather_wood": "收集木头是Minecraft中的第一步。找到树木并收集木头。",
-    "craft_workbench": "使用收集到的木头合成工作台。",
-    "craft_wooden_tools": "使用工作台合成木制工具，如木镐。",
-    "gather_stone": "使用木镐挖掘石头。",
-    "craft_stone_tools": "使用石头合成更好的工具，如石镐。",
-    "gather_coal": "寻找并挖掘煤炭。",
-    "craft_torches": "使用木棍和煤炭合成火把。",
-    "build_shelter": "建造一个简单的庇护所来度过夜晚。",
-    "gather_food": "寻找食物来源，如动物或农作物。"
-}
 
-# 状态分析提示词
-def get_state_analysis_prompt(state):
-    # 格式化聊天消息
-    chat_messages = ""
-    if 'recentChats' in state and state['recentChats']:
-        chat_messages = "\\n最近的聊天消息:\\n" + "\\n".join([
-            f"- {chat['username']}: {chat['message']}"
-            for chat in state['recentChats']
-        ])
+SYSTEM_PROMPT = """你是一个 Minecraft 游戏AI助手。你需要根据当前游戏状态，自主决定下一步行动。你拥有完全自主权，可以自由探索、收集、建造、战斗和生存。
 
-    # 尝试获取并格式化时间 - 如果状态中没有，则不显示
-    time_of_day = state.get('timeOfDay', None)
-    time_string = f"时间: {time_of_day}\\n" if time_of_day else ""
+## 可用动作
+请以 JSON 格式回复动作指令，使用以下动作类型：
 
-    # 突出显示上一个动作的结果
-    last_action = state.get('lastAction', '无')
-    action_result = state.get('actionResult', '未知')
-    last_action_string = f"上一个动作: {last_action} -> 结果: {action_result}"
+| type | 参数 | 说明 |
+|------|------|------|
+| moveTo | x, y, z | 移动到指定坐标 |
+| collect | blockType, count?(默认1), radius?(默认32) | 采集方块/资源 |
+| placeBlock | itemName, x, y, z | 在指定位置放置方块 |
+| dig | x, y, z | 挖掘指定位置的方块 |
+| attack | target (实体名或ID) | 攻击目标实体 |
+| jumpAttack | target | 跳跃攻击 (暴击) |
+| lookAt | x, y, z | 看向指定位置 |
+| equip | itemName, destination?(默认hand) | 装备物品 |
+| unequip | destination?(默认hand) | 卸下装备 |
+| craft | itemName, count?(默认1) | 合成物品 |
+| chat | message | 发送聊天消息 |
+| useHeldItem | (无) | 使用手持物品 |
+| wait | ticks?(默认20) | 等待指定ticks |
+| dropItem | itemName, count?(默认1) | 丢弃物品 |
+| eat | itemName?(自动选择) | 吃食物恢复饥饿值 |
+| fish | duration?(默认600 ticks) | 用钓鱼竿钓鱼 |
+| smelt | itemName, fuelName?(默认coal), count?(默认1) | 在熔炉中熔炼物品 |
+| openChest | x, y, z, chestAction(view/deposit/withdraw), itemName?, count? | 操作箱子 |
+| depositItem | x, y, z, itemName, count? | 将物品存入箱子 |
+| withdrawItem | x, y, z, itemName, count? | 从箱子取出物品 |
+| sleep | (无) | 在附近的床上睡觉 |
+| followPlayer | playerName, distance?(默认3) | 跟随指定玩家 |
+| explore | radius?(默认50) | 向随机方向探索，扫描有价值方块和实体 |
 
-    return f"""
-当前游戏状态:
-位置: X={state['position']['x']:.1f}, Y={state['position']['y']:.1f}, Z={state['position']['z']:.1f}
-生命值: {state['health']}/20
-饥饿值: {state['food']}/20
-{time_string}
-物品栏:
-{format_inventory(state['inventory'])}
+## 回复格式
+只返回一个 JSON 动作:
+```json
+{"type": "动作类型", "参数名": "参数值"}
+```
 
-附近实体:
-{format_entities(state['nearbyEntities'])}
+## 自主决策指导
+你应该像一个真正的Minecraft玩家一样思考和行动:
 
-附近方块:
-{format_blocks(state['nearbyBlocks'])}
+### 生存优先
+- 血量低于10时: 优先吃食物或撤退到安全地点
+- 饥饿值低于6时: 立即吃食物
+- 夜晚来临时: 找床睡觉，或建造临时庇护所，或制作火把照明
 
-{last_action_string}
-{chat_messages}
+### 资源管理
+- 没有工具时: 先收集木头 → 制作工作台 → 制作木质/石质工具
+- 发现矿石时: 评估工具等级是否足够，足够则采集
+- 物品栏快满时: 可以制作箱子存放，或丢弃低价值物品
+- 缺少食物时: 寻找动物猎杀或种植农作物
 
-请仔细分析当前状态，并决定下一步行动（最多5个动作）。请在 'thought' 字段中详细解释你的思考过程和决策依据。
+### 探索与建造
+- 定期使用 explore 了解周围环境
+- 发现有价值资源(钻石、铁矿等)时优先采集
+- 可以建造简易房屋: 收集材料 → 选址 → 逐步放置方块
+- 利用箱子和熔炉建立简易基地
 
-**决策时请重点考虑以下因素:**
-1.  **生存与威胁:**
-    *   生命值或饥饿值是否过低？附近是否有敌对生物？是否存在环境危险（如高处、岩浆）？
-    *   当前最紧迫的生存需求是什么？（例如：寻找食物、躲避怪物、寻找/建造庇护所）
-2.  **当前任务:**
-    *   当前的主要任务是什么？
-    *   要完成任务，下一步最合理的操作是什么？
-    *   是否拥有完成下一步所需的工具和资源？
-3.  **效率与资源:**
-    *   是否有更有效的方法来完成目标（例如使用合适的工具、利用复合动作）？
-    *   工具的耐久度如何？是否需要制作或修复工具？
-4.  **处理失败:**
-    *   如果上一个动作失败了 ({action_result})，分析可能的原因（例如：距离太远、缺少工具、路径被阻挡）。
-    *   基于失败原因，提出一个修正后的行动计划或替代方案。
-5.  **玩家互动:**
-    *   如果收到了玩家的消息，请在回应的同时，将玩家的建议纳入考量。
+### 社交互动
+- 看到玩家时可以打招呼 (chat)
+- 收到命令时优先执行玩家指示
+- 可以跟随玩家协助完成任务
 
-**输出格式要求:**
-请严格以JSON格式返回你的决策，包含 'thought' (字符串，解释思考过程) 和 'actions' (JSON对象数组，包含动作类型和参数)。
-
-示例:
-{{
-    "thought": "生命值较低，附近有僵尸威胁，需要先消灭僵尸确保安全，然后再继续收集木头。使用 jumpAttack 提高效率。",
-    "actions": [
-        {{
-            "type": "jumpAttack",
-            "entityName": "Zombie"
-        }},
-        {{
-            "type": "collect",
-            "blockType": "oak_log",
-            "count": 5
-        }}
-    ]
-}}
+### 自由发育模式
+当任务为"自由发育"或"自由行动"时，你应完全自主决定做什么:
+1. 评估当前状态(血量、饥饿、装备、物品)
+2. 根据生存需求确定优先级
+3. 制定短期目标并执行
+4. 不断提升装备等级和基地建设
 """
 
-# 格式化物品栏
-def format_inventory(inventory):
-    if not inventory:
-        return "空"
 
-    formatted_items = []
-    # 假设物品信息包含 'name', 'count', 'slot', 和 'durability' {current, max}
-    for item in inventory:
-        name = item.get('name', 'unknown_item')
-        count = item.get('count', 1)
-        display_name = f"{name}: {count}"
+def format_state_message(state: dict, task: str = "") -> str:
+    """
+    将机器人状态格式化为用户消息。
 
-        # 添加耐久度信息 (如果存在且不为null)
-        durability_info = item.get('durability')
-        if durability_info and durability_info.max > 0: # 确保有最大耐久度信息
-            display_name += f" (Dur: {durability_info.current}/{durability_info.max})"
+    参数:
+        state: 从 /bot/status 获取的状态字典
+        task: 当前任务描述
 
-        formatted_items.append(f"- {display_name}")
+    返回:
+        格式化的状态文本
+    """
+    lines = []
 
-    return "\\n".join(formatted_items) if formatted_items else "空"
+    # 任务
+    if task:
+        lines.append(f"## 当前任务\n{task}\n")
 
+    # 基础状态
+    lines.append("## 状态")
+    pos = state.get("position")
+    if pos:
+        lines.append(f"- 位置: ({pos.get('x', 0):.1f}, {pos.get('y', 0):.1f}, {pos.get('z', 0):.1f})")
+    lines.append(f"- 生命: {state.get('health', 0)}/20")
+    lines.append(f"- 饥饿: {state.get('food', 0)}/20")
+    lines.append(f"- 时间: {state.get('timeOfDay', '未知')}")
 
-# 格式化实体
-def format_entities(entities):
-    if not entities:
-        return "无"
+    # 物品栏
+    inv = state.get("inventory", [])
+    if inv:
+        lines.append("\n## 物品栏")
+        for item in inv[:15]:
+            name = item.get("name", "?")
+            count = item.get("count", 1)
+            lines.append(f"- {name} x{count}")
+    else:
+        lines.append("\n## 物品栏\n(空)")
 
-    formatted_entities = []
-    # 假设实体信息包含 'name', 'type', 'distance', 'kind', 'isHostile'
-    for entity in entities:
-        name = entity.get('name', 'unknown_entity')
-        etype = entity.get('type', 'unknown')
-        distance = entity.get('distance', 0.0)
-        kind = entity.get('kind', 'unknown')
-        is_hostile = entity.get('isHostile') # Boolean
+    # 附近实体
+    entities = state.get("nearbyEntities", [])
+    if entities:
+        lines.append("\n## 附近实体")
+        for ent in entities[:10]:
+            name = ent.get("name", "unknown")
+            dist = ent.get("distance", 0)
+            hostile = " ⚠️敌对" if ent.get("isHostile") else ""
+            lines.append(f"- {name} (距离:{dist:.1f}){hostile}")
 
-        # 根据 isHostile 添加标签
-        hostility_tag = ""
-        if is_hostile is True:
-            hostility_tag = " (敌对)" # Hostile
-        elif is_hostile is False:
-            # 对于非敌对，可以不加标签或加 (非敌对)
-             hostility_tag = " (非敌对)" # Non-hostile
-        # 如果 is_hostile 是 null 或 undefined, 不加标签
+    # 附近方块
+    blocks = state.get("nearbyBlocks", [])
+    if blocks:
+        lines.append("\n## 附近方块")
+        # 按类型汇总
+        block_counts: dict[str, int] = {}
+        for b in blocks:
+            name = b.get("name", "?")
+            block_counts[name] = block_counts.get(name, 0) + 1
+        for name, count in sorted(block_counts.items(), key=lambda x: -x[1])[:10]:
+            lines.append(f"- {name} x{count}")
 
-        # 可以选择性地包含 kind 信息，如果它提供了有用的上下文
-        # formatted_entities.append(f"- {name} ({etype}, {kind}{hostility_tag}): 距离 {distance:.1f} 格")
-        formatted_entities.append(f"- {name} ({etype}{hostility_tag}): 距离 {distance:.1f} 格")
+    # 最近聊天
+    chats = state.get("recentChats", [])
+    if chats:
+        lines.append("\n## 最近聊天")
+        for msg in chats[:3]:
+            lines.append(f"- {msg.get('username', '?')}: {msg.get('message', '')}")
 
-    return "\\n".join(formatted_entities) if formatted_entities else "无"
+    # 上次动作结果
+    last_action = state.get("lastAction")
+    action_result = state.get("actionResult")
+    if last_action:
+        lines.append(f"\n## 上次动作\n{last_action}")
+    if action_result:
+        lines.append(f"结果: {action_result}")
 
-# 格式化方块
-def format_blocks(blocks):
-    if not blocks:
-        return "无"
-
-    # 合并相同类型的方块
-    block_types = {}
-    for block in blocks:
-        # 假设方块信息只包含 'name'
-        name = block.get('name', 'unknown_block')
-        if name in block_types:
-            block_types[name] += 1
-        else:
-            block_types[name] = 1
-
-    return "\\n".join([f"- {name}: {count} 个" for name, count in block_types.items()]) if block_types else "无" 
+    lines.append("\n请决定下一步行动，以 JSON 格式回复。")
+    return "\n".join(lines)

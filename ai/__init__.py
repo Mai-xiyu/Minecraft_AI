@@ -1,5 +1,6 @@
-# 初始化文件 
+"""Minecraft AI 模块"""
 
 from .agent import MinecraftAgent
+from .llm_client import LLMClient
 
-# 在这里可以导出其他需要的类和方法 
+__all__ = ["MinecraftAgent", "LLMClient"]

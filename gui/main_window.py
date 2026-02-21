@@ -1,375 +1,554 @@
-from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
-                           QPushButton, QTextEdit, QLabel, QSpinBox, QLineEdit,
-                           QGroupBox, QFormLayout, QTabWidget, QComboBox, QCheckBox, QDoubleSpinBox, QMessageBox)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer, QMetaObject, Q_ARG
+"""
+Minecraft AI 控制面板 —— PyQt6 主窗口
+重构版: 移除视觉系统, 使用通用 LLMClient
+"""
+
+from PyQt6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QTextEdit, QLabel, QSpinBox, QLineEdit,
+    QGroupBox, QFormLayout, QTabWidget, QComboBox, QCheckBox,
+    QDoubleSpinBox, QMessageBox,
+)
+from PyQt6.QtCore import Qt, QThread, pyqtSignal, QObject, QTimer
 import logging
 import json
-import sys
-import time
-from pathlib import Path
-# Import i18n functions and DEFAULT_LANG
-from .i18n import _, set_language, register_widget, update_ui_texts, get_current_language, DEFAULT_LANG
-from gui.sponsor_page import SponsorPage
 import os
 import subprocess
+import signal
+import time
+from pathlib import Path
 import requests
 from requests.exceptions import RequestException
-import threading
 
-# 添加版本号常量
-VERSION = "1.2.7-By 饩雨(Mai xiyu)"
+from .i18n import (
+    _, set_language, register_widget, update_ui_texts,
+    get_current_language, DEFAULT_LANG,
+)
+from gui.sponsor_page import SponsorPage
+
+VERSION = "2.1.0-Improved"
+
+
+# ─── 日志处理器 ──────────────────────────────────────────
 
 class LogHandler(logging.Handler):
-    """自定义日志处理器，将日志发送到GUI"""
     def __init__(self, signal):
         super().__init__()
         self.signal = signal
-        # Use a simple format, translation will happen in the GUI
-        self.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        self.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
 
     def emit(self, record):
-        # Emit the raw message or key. Formatting/translation happens in append_log
         msg = self.format(record)
-        # Try to emit the log key and args if available
-        log_key = getattr(record, 'log_key', None)
-        log_args = getattr(record, 'log_args', {})
-        if log_key:
-            self.signal.emit((log_key, log_args))
-        else:
-            # Fallback for standard logging
-            self.signal.emit(msg)
+        self.signal.emit(msg)
+
+
+# ─── 连接测试线程 ────────────────────────────────────────
 
 class ConnectionThread(QThread):
-    """连接测试线程"""
     status_signal = pyqtSignal(str)
     finished_signal = pyqtSignal(bool)
 
-    def __init__(self, url, attempts):
+    def __init__(self, url, attempts=5):
         super().__init__()
         self.url = url
         self.attempts = attempts
 
     def run(self):
-        try:
-            # 尝试导入 test_connection
+        for i in range(self.attempts):
             try:
-                from test_connection import test_connection
-            except ImportError:
-                # 如果导入失败，创建一个简单的内部测试函数
-                def test_connection(url, attempts):
-                    self.status_signal.emit(f"尝试连接到 {url}...")
-                    try:
-                        import requests
-                        for i in range(attempts):
-                            try:
-                                response = requests.get(url, timeout=2)
-                                if response.status_code == 200:
-                                    return True
-                            except Exception:
-                                pass
-                            if i < attempts - 1:
-                                time.sleep(1)
-                        return False
-                    except ImportError:
-                        self.status_signal.emit("错误：未安装requests库")
-                        return False
-            
-            result = test_connection(self.url, self.attempts)
-            self.finished_signal.emit(result)
-        except Exception as e:
-            self.status_signal.emit(f"连接错误: {e}")
-            self.finished_signal.emit(False)
+                resp = requests.get(self.url, timeout=3)
+                if resp.status_code == 200:
+                    self.finished_signal.emit(True)
+                    return
+            except Exception:
+                pass
+            if i < self.attempts - 1:
+                time.sleep(1)
+        self.finished_signal.emit(False)
 
-class AIThread(QThread):
-    """AI运行线程"""
-    log_signal = pyqtSignal(str)
-    update_signal = pyqtSignal(dict)  # 添加状态更新信号
-    finished = pyqtSignal()  # 添加完成信号
-    
-    def __init__(self, agent, steps, delay):
+
+# ─── 通用 HTTP 工作线程 ──────────────────────────────────
+
+class HttpWorker(QThread):
+    """在工作线程中执行 HTTP 请求, 避免阻塞主线程"""
+    success = pyqtSignal(object)
+    error = pyqtSignal(str)
+
+    def __init__(self, method: str, url: str, payload=None, timeout: int = 5):
         super().__init__()
-        self.agent = agent
-        self.steps = steps
-        self.delay = delay
-        self.running = True
-    
+        self.method = method.upper()
+        self.url = url
+        self.payload = payload
+        self.timeout = timeout
+
     def run(self):
         try:
-            for i in range(self.steps):
-                if not self.running:
+            if self.method == "GET":
+                resp = requests.get(self.url, timeout=self.timeout)
+            else:
+                resp = requests.post(self.url, json=self.payload, timeout=self.timeout)
+            self.success.emit(resp.json())
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+# ─── Bot 就绪等待线程 ────────────────────────────────────
+
+class LLMTestWorker(QThread):
+    """测试 LLM API 连接 (OpenAI 兼容接口)"""
+    success = pyqtSignal(str)   # model reply snippet
+    error = pyqtSignal(str)
+
+    def __init__(self, base_url: str, api_key: str, model: str):
+        super().__init__()
+        self.base_url = base_url.rstrip("/")
+        self.api_key = api_key
+        self.model = model
+
+    def run(self):
+        try:
+            url = f"{self.base_url}/chat/completions"
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": "Say hello in one sentence."}],
+                "max_tokens": 64,
+            }
+            resp = requests.post(url, json=payload, headers=headers, timeout=30)
+            if resp.status_code == 200:
+                data = resp.json()
+                reply = (
+                    data.get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content", "")
+                    .strip()
+                )
+                self.success.emit(
+                    f"HTTP 200 OK | model={data.get('model', self.model)}\n"
+                    f"Reply: {reply[:120]}"
+                )
+            else:
+                self.error.emit(f"HTTP {resp.status_code}: {resp.text[:200]}")
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class BotReadyWorker(QThread):
+    """在工作线程中轮询 bot 服务器直到就绪或超时"""
+    ready = pyqtSignal()
+    failed = pyqtSignal(str)
+
+    def __init__(self, url: str, max_attempts: int = 20):
+        super().__init__()
+        self.url = url
+        self.max_attempts = max_attempts
+
+    def run(self):
+        for i in range(self.max_attempts):
+            try:
+                resp = requests.get(self.url, timeout=2)
+                if resp.status_code == 200:
+                    self.ready.emit()
+                    return
+            except Exception:
+                pass
+            time.sleep(1)
+        self.failed.emit("Bot 服务器启动超时")
+
+
+# ─── Bot 服务器进程管理线程 ──────────────────────────────
+
+class BotServerThread(QThread):
+    """管理 Node.js bot 子进程, 捕获 stdout/stderr 输出"""
+    output_signal = pyqtSignal(str)
+    ready_signal = pyqtSignal()
+    stopped_signal = pyqtSignal()
+
+    def __init__(self, bot_dir: str):
+        super().__init__()
+        self.bot_dir = bot_dir
+        self.process: subprocess.Popen | None = None
+        self._stopping = False
+
+    def run(self):
+        try:
+            self.process = subprocess.Popen(
+                ["node", "index.js"],
+                cwd=self.bot_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                encoding="utf-8",
+                errors="replace",
+            )
+            for line in iter(self.process.stdout.readline, ""):
+                if self._stopping:
                     break
-                    
-                # 执行一步并获取结果
+                stripped = line.rstrip()
+                if stripped:
+                    self.output_signal.emit(f"[Bot] {stripped}")
+                if "服务器运行在" in stripped or "Server running" in stripped.lower():
+                    self.ready_signal.emit()
+            self.process.wait()
+        except FileNotFoundError:
+            self.output_signal.emit("[Bot] 错误: 未找到 node 命令, 请确保 Node.js 已安装并在 PATH 中")
+        except Exception as e:
+            self.output_signal.emit(f"[Bot] 进程异常: {e}")
+        finally:
+            self.stopped_signal.emit()
+
+    def stop(self):
+        self._stopping = True
+        if self.process and self.process.poll() is None:
+            try:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+            except Exception:
+                pass
+
+
+# ─── AI 运行线程 ─────────────────────────────────────────
+
+class AIThread(QThread):
+    log_signal = pyqtSignal(str)
+    update_signal = pyqtSignal(dict)
+    pause_signal = pyqtSignal(str)
+    finished = pyqtSignal()
+
+    def __init__(self, agent, delay):
+        super().__init__()
+        self.agent = agent
+        self.delay = delay
+        self.running = True
+
+    def run(self):
+        step = 0
+        try:
+            while self.running:
                 result = self.agent.step()
-                
-                # 发送日志消息
-                self.log_signal.emit(f"执行步骤 {i+1}/{self.steps}")
-                
-                # 同时发送结构化状态更新
+
+                # Agent 主动停止
+                if result.get("stopped"):
+                    break
+
+                step += 1
+
+                # 自动暂停检测
+                if result.get("auto_paused"):
+                    reason = result.get("error", "连续错误过多")
+                    self.pause_signal.emit(reason)
+                    break
+
+                action_str = ""
+                if result.get("action"):
+                    action_str = _("log_step_action", type=result['action'].get('type', '?'))
+                status_str = _("log_step_success") if result.get("success") else _("log_step_failure")
+                error_str = _("log_step_error", err=result['error']) if result.get("error") else ""
+
+                self.log_signal.emit(
+                    _("log_ai_step_infinite", step=step,
+                      status=status_str, action=action_str, error=error_str)
+                )
+
                 self.update_signal.emit({
-                    'status': True,
-                    'step': i+1,
-                    'total': self.steps,
-                    'result': result
+                    "status": result.get("success", False),
+                    "step": step,
+                    "result": result,
                 })
-                
+
                 time.sleep(self.delay)
-                
-            # 完成后发送信号
+
             self.finished.emit()
         except Exception as e:
-            error_msg = f"AI执行错误: {e}"
-            self.log_signal.emit(error_msg)
-            # 发送错误状态
-            self.update_signal.emit({'status': False, 'error': str(e)})
+            self.log_signal.emit(_("log_ai_exception", error=str(e)))
+            self.update_signal.emit({"status": False, "error": str(e)})
             self.finished.emit()
-    
-    def terminate(self):
+
+    def stop(self):
         self.running = False
-        super().terminate()
+        if self.agent:
+            self.agent.request_stop()
+
+
+# ─── 主窗口 ──────────────────────────────────────────────
 
 class MainWindow(QMainWindow):
-    # Signal can now emit tuple (key, args) or str
     log_signal = pyqtSignal(object)
 
     def __init__(self):
         super().__init__()
+        self.agent = None
+        self.ai_thread = None
+        self.bot_server_thread = None
+        self.status_timer = None
+        self._poll_worker = None          # 状态轮询工作线程
+        self._sync_worker = None          # 配置同步工作线程
+        self._chat_worker = None          # 聊天发送工作线程
+        self._bot_ready_worker = None     # Bot 就绪等待工作线程
+        self._llm_test_worker = None      # LLM 测试工作线程
 
-        # --- Language Setup (Early) ---
-        # Load language preference before setting up UI
         self.load_language_preference()
-        # --- Store status keys ---
         self.current_connection_status_key = "status_not_connected"
         self.current_bot_status_key = "status_bot_not_started"
-        # --- End Store status keys ---
-        # --------------------------------
 
-        # 修改标题，添加版本号 - Use i18n
-        # self.setWindowTitle(f"Minecraft AI 控制面板 v{VERSION}") - Done via register_widget
         self.setMinimumSize(800, 600)
-        
-        # 创建主布局
+
+        # 主布局
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
-        
-        # 创建选项卡
+
         self.tabs = QTabWidget()
         layout.addWidget(self.tabs)
-        
-        # 控制面板选项卡
+
         control_tab = QWidget()
-        control_layout = QVBoxLayout(control_tab) # Pass parent widget here
-        
-        # 配置选项卡
+        control_layout = QVBoxLayout(control_tab)
+
         config_tab = QWidget()
-        config_layout = QVBoxLayout(config_tab) # Pass parent widget here
-        
-        # 添加赞助页面
-        sponsor_tab = SponsorPage() # SponsorPage needs to be updated for i18n too
-        
-        # 添加控制面板组件
+        config_layout = QVBoxLayout(config_tab)
+
+        sponsor_tab = SponsorPage()
+
         self.setup_control_panel(control_layout)
-        # control_tab.setLayout(control_layout) # Set the layout on the control tab widget - No longer needed
-        
-        # 添加配置面板组件
         self.setup_config_panel(config_layout)
-        # config_tab.setLayout(config_layout) # Set the layout on the config tab widget - No longer needed
-        
-        # Add tabs after setup so widgets can be registered
-        self.tabs.addTab(control_tab, "") # Placeholder text, will be set by update_ui_texts
+
+        self.tabs.addTab(control_tab, "")
         self.tabs.addTab(config_tab, "")
         self.tabs.addTab(sponsor_tab, "")
-        
-        # Register tab titles for translation
+
         register_widget(self.tabs, "control_tab", attr="tabText", index=0)
         register_widget(self.tabs, "config_tab", attr="tabText", index=1)
         register_widget(self.tabs, "sponsor_tab", attr="tabText", index=2)
-        
-        # Register window title
         register_widget(self, "window_title", attr="windowTitle", version=VERSION)
-        
-        # 设置日志处理
+
         self.setup_logging()
-        
-        # 加载配置 (loads language preference again, maybe redundant but safe)
         self.load_config()
-        
-        # 加载自定义任务
         self.load_custom_tasks()
-        
-        # Initial UI text update after all widgets are created and registered
         update_ui_texts()
-        self.update_dynamic_texts() # Also update dynamic texts initially
+
+    # ── 控制面板 ──────────────────────────────────────────
 
     def setup_control_panel(self, layout):
         # 状态组
         self.status_group = QGroupBox()
         register_widget(self.status_group, "status_group", attr="title")
         status_layout = QFormLayout()
-        
-        # Connection Status
-        self.status_label = QLabel() # Field widget
-        # self.status_label.setText(_("status_not_connected")) # Initial text set below
-        status_label_desc = QLabel() # Label widget - Create it empty
-        register_widget(status_label_desc, "connection_status_label") # Register the LABEL
-        status_layout.addRow(status_label_desc, self.status_label) # Add the widgets
-        
-        # Bot Status
-        self.bot_status_label = QLabel() # Field widget
-        # self.bot_status_label.setText(_("status_bot_not_started")) # Initial text set below
-        bot_status_label_desc = QLabel() # Label widget - Create it empty
-        register_widget(bot_status_label_desc, "bot_status_label") # Register the LABEL
-        status_layout.addRow(bot_status_label_desc, self.bot_status_label) # Add the widgets
-        
-        # Set initial text for status labels using the stored keys
+
+        self.status_label = QLabel()
+        status_label_desc = QLabel()
+        register_widget(status_label_desc, "connection_status_label")
+        status_layout.addRow(status_label_desc, self.status_label)
+
+        self.bot_status_label = QLabel()
+        bot_status_label_desc = QLabel()
+        register_widget(bot_status_label_desc, "bot_status_label")
+        status_layout.addRow(bot_status_label_desc, self.bot_status_label)
+
         self.status_label.setText(_(self.current_connection_status_key))
         self.bot_status_label.setText(_(self.current_bot_status_key))
 
         self.status_group.setLayout(status_layout)
         layout.addWidget(self.status_group)
-        
-        # 控制按钮组
+
+        # Bot 服务器按钮
+        bot_button_layout = QHBoxLayout()
+
+        self.start_bot_button = QPushButton()
+        register_widget(self.start_bot_button, "start_bot_button")
+        self.start_bot_button.clicked.connect(self.start_bot_server)
+        bot_button_layout.addWidget(self.start_bot_button)
+
+        self.stop_bot_button = QPushButton()
+        register_widget(self.stop_bot_button, "stop_bot_button")
+        self.stop_bot_button.clicked.connect(self.stop_bot_server)
+        self.stop_bot_button.setEnabled(False)
+        bot_button_layout.addWidget(self.stop_bot_button)
+
+        layout.addLayout(bot_button_layout)
+
+        # Bot 实时状态面板
+        self.bot_info_group = QGroupBox()
+        register_widget(self.bot_info_group, "bot_info_group", attr="title")
+        bot_info_layout = QFormLayout()
+
+        self.bot_health_label = QLabel("--")
+        bot_health_desc = QLabel()
+        register_widget(bot_health_desc, "bot_health_label")
+        bot_info_layout.addRow(bot_health_desc, self.bot_health_label)
+
+        self.bot_food_label = QLabel("--")
+        bot_food_desc = QLabel()
+        register_widget(bot_food_desc, "bot_food_label")
+        bot_info_layout.addRow(bot_food_desc, self.bot_food_label)
+
+        self.bot_position_label = QLabel("--")
+        bot_pos_desc = QLabel()
+        register_widget(bot_pos_desc, "bot_position_label")
+        bot_info_layout.addRow(bot_pos_desc, self.bot_position_label)
+
+        self.bot_inventory_label = QLabel("--")
+        bot_inv_desc = QLabel()
+        register_widget(bot_inv_desc, "bot_inventory_label")
+        bot_info_layout.addRow(bot_inv_desc, self.bot_inventory_label)
+
+        self.bot_info_group.setLayout(bot_info_layout)
+        layout.addWidget(self.bot_info_group)
+
+        # AI 按钮
         button_layout = QHBoxLayout()
-        
+
         self.start_button = QPushButton()
         register_widget(self.start_button, "start_ai_button")
         self.start_button.clicked.connect(self.start_ai)
         button_layout.addWidget(self.start_button)
-        
+
         self.stop_button = QPushButton()
         register_widget(self.stop_button, "stop_ai_button")
         self.stop_button.clicked.connect(self.stop_ai)
         self.stop_button.setEnabled(False)
         button_layout.addWidget(self.stop_button)
-        
+
         self.test_conn_button = QPushButton()
         register_widget(self.test_conn_button, "test_connection_button")
         self.test_conn_button.clicked.connect(self.test_connection)
         button_layout.addWidget(self.test_conn_button)
-        
-        # 添加同步配置按钮
+
+        self.test_llm_button = QPushButton()
+        register_widget(self.test_llm_button, "test_llm_button")
+        self.test_llm_button.clicked.connect(self.test_llm_connection)
+        button_layout.addWidget(self.test_llm_button)
+
         self.sync_config_button = QPushButton()
         register_widget(self.sync_config_button, "sync_config_button")
         self.sync_config_button.clicked.connect(self.sync_config_to_bot)
         button_layout.addWidget(self.sync_config_button)
-        
-        # 添加模型下载按钮
-        self.download_models_button = QPushButton()
-        register_widget(self.download_models_button, "download_models_button")
-        self.download_models_button.clicked.connect(self.download_vision_models)
-        button_layout.addWidget(self.download_models_button)
-        
+
         layout.addLayout(button_layout)
-        
-        # 日志显示
+
+        # 日志
         log_group = QGroupBox()
         register_widget(log_group, "log_group", attr="title")
         log_layout = QVBoxLayout()
-        
         self.log_text = QTextEdit()
         self.log_text.setReadOnly(True)
         log_layout.addWidget(self.log_text)
-        
         log_group.setLayout(log_layout)
         layout.addWidget(log_group)
-        
-        # 添加聊天组
+
+        # 运行时任务修改
+        task_change_layout = QHBoxLayout()
+        self.runtime_task_input = QLineEdit()
+        register_widget(self.runtime_task_input, "runtime_task_placeholder", attr="placeholderText")
+        self.runtime_task_input.returnPressed.connect(self.change_task_runtime)
+        task_change_layout.addWidget(self.runtime_task_input)
+
+        self.change_task_button = QPushButton()
+        register_widget(self.change_task_button, "change_task_button")
+        self.change_task_button.clicked.connect(self.change_task_runtime)
+        self.change_task_button.setEnabled(False)
+        task_change_layout.addWidget(self.change_task_button)
+        layout.addLayout(task_change_layout)
+
+        # 聊天
         chat_group = QGroupBox()
         register_widget(chat_group, "chat_group", attr="title")
         chat_layout = QVBoxLayout()
-        
-        # 聊天显示区域
+
         self.chat_display = QTextEdit()
         self.chat_display.setReadOnly(True)
         chat_layout.addWidget(self.chat_display)
-        
-        # 聊天输入区域
+
         chat_input_layout = QHBoxLayout()
         self.chat_input = QLineEdit()
         register_widget(self.chat_input, "chat_input_placeholder", attr="placeholderText")
         self.chat_input.returnPressed.connect(self.send_chat)
         chat_input_layout.addWidget(self.chat_input)
-        
+
         send_button = QPushButton()
         register_widget(send_button, "send_button")
         send_button.clicked.connect(self.send_chat)
         chat_input_layout.addWidget(send_button)
-        
+
         chat_layout.addLayout(chat_input_layout)
         chat_group.setLayout(chat_layout)
         layout.addWidget(chat_group)
 
+    # ── 配置面板 ──────────────────────────────────────────
+
     def setup_config_panel(self, layout):
-        # Language Selection (Add this first or near the top)
+        # 语言切换
         lang_layout = QHBoxLayout()
         lang_label = QLabel()
         register_widget(lang_label, "language_label")
         self.lang_combo = QComboBox()
         self.lang_combo.addItem("中文", "zh")
         self.lang_combo.addItem("English", "en")
-        # Connect signal AFTER initial population and language setting
         self.lang_combo.currentTextChanged.connect(self.language_changed)
         lang_layout.addWidget(lang_label)
         lang_layout.addWidget(self.lang_combo)
         lang_layout.addStretch()
         layout.addLayout(lang_layout)
 
-        # Minecraft配置
+        # ── Minecraft 配置 ────────────────────────────────
         mc_group = QGroupBox()
         register_widget(mc_group, "minecraft_group", attr="title")
         mc_layout = QFormLayout()
-        
+
         self.host_input = QLineEdit("localhost")
         mc_host_label = QLabel()
         register_widget(mc_host_label, "mc_host_label")
         mc_layout.addRow(mc_host_label, self.host_input)
-        
+
         self.port_input = QSpinBox()
         self.port_input.setRange(1, 65535)
         self.port_input.setValue(25565)
         mc_port_label = QLabel()
         register_widget(mc_port_label, "mc_port_label")
         mc_layout.addRow(mc_port_label, self.port_input)
-        
+
         self.username_input = QLineEdit("AI_Player")
         mc_username_label = QLabel()
         register_widget(mc_username_label, "mc_username_label")
         mc_layout.addRow(mc_username_label, self.username_input)
-        
-        # 添加版本选择
+
         self.version_input = QComboBox()
-        versions = ["1.21.1", "1.20.4", "1.20.2", "1.20.1", "1.19.4", "1.19.3", "1.19.2", "1.18.2", "1.17.1", "1.16.5"]
+        versions = [
+            "1.21.1", "1.20.4", "1.20.2", "1.20.1",
+            "1.19.4", "1.19.3", "1.19.2", "1.18.2", "1.17.1", "1.16.5",
+        ]
         self.version_input.addItems(versions)
-        self.version_input.setEditable(True)  # 允许输入自定义版本
+        self.version_input.setEditable(True)
         mc_version_label = QLabel()
         register_widget(mc_version_label, "mc_version_label")
         mc_layout.addRow(mc_version_label, self.version_input)
-        
-        # 修改视距设置
-        self.view_distance_input = QSpinBox()  # 改用QSpinBox而不是QComboBox
-        self.view_distance_input.setRange(2, 32)  # 视距范围2-32个区块
-        self.view_distance_input.setValue(8)  # 默认8个区块
+
+        self.view_distance_input = QSpinBox()
+        self.view_distance_input.setRange(2, 32)
+        self.view_distance_input.setValue(8)
         mc_view_distance_label = QLabel()
         register_widget(mc_view_distance_label, "mc_view_distance_label")
         mc_layout.addRow(mc_view_distance_label, self.view_distance_input)
-        
-        # 聊天长度限制
+
         self.chat_limit_input = QSpinBox()
         self.chat_limit_input.setRange(1, 256)
         self.chat_limit_input.setValue(100)
         mc_chat_limit_label = QLabel()
         register_widget(mc_chat_limit_label, "mc_chat_limit_label")
         mc_layout.addRow(mc_chat_limit_label, self.chat_limit_input)
-        
-        # 自动重连设置
+
         self.auto_reconnect = QCheckBox()
         self.auto_reconnect.setChecked(True)
         mc_auto_reconnect_label = QLabel()
         register_widget(mc_auto_reconnect_label, "mc_auto_reconnect_label")
         mc_layout.addRow(mc_auto_reconnect_label, self.auto_reconnect)
-        
-        # 重连延迟
+
         self.reconnect_delay = QSpinBox()
         self.reconnect_delay.setRange(1000, 60000)
         self.reconnect_delay.setValue(5000)
@@ -377,363 +556,274 @@ class MainWindow(QMainWindow):
         mc_reconnect_delay_label = QLabel()
         register_widget(mc_reconnect_delay_label, "mc_reconnect_delay_label")
         mc_layout.addRow(mc_reconnect_delay_label, self.reconnect_delay)
-        
+
         mc_group.setLayout(mc_layout)
         layout.addWidget(mc_group)
-        
-        # 添加服务器配置组
+
+        # ── Bot 服务器配置 ────────────────────────────────
         server_group = QGroupBox()
         register_widget(server_group, "server_group", attr="title")
         server_layout = QFormLayout()
-        
+
         self.server_host_input = QLineEdit("localhost")
         server_host_label = QLabel()
         register_widget(server_host_label, "server_host_label")
         server_layout.addRow(server_host_label, self.server_host_input)
-        
+
         self.server_port_input = QSpinBox()
         self.server_port_input.setRange(1, 65535)
         self.server_port_input.setValue(3002)
         server_port_label = QLabel()
         register_widget(server_port_label, "server_port_label")
         server_layout.addRow(server_port_label, self.server_port_input)
-        
+
         server_group.setLayout(server_layout)
         layout.addWidget(server_group)
-        
-        # AI配置
+
+        # ── AI / LLM 配置 ────────────────────────────────
         ai_group = QGroupBox()
         register_widget(ai_group, "ai_group", attr="title")
         ai_layout = QFormLayout()
-        
+
+        # API Key
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         api_key_label = QLabel()
         register_widget(api_key_label, "api_key_label")
         ai_layout.addRow(api_key_label, self.api_key_input)
-        
-        # 添加任务选择和保存组合
+
+        # Base URL (新增)
+        self.base_url_input = QLineEdit("https://api.deepseek.com/v1")
+        base_url_label = QLabel()
+        register_widget(base_url_label, "base_url_label")
+        ai_layout.addRow(base_url_label, self.base_url_input)
+
+        # Model (新增)
+        self.model_input = QComboBox()
+        self.model_input.addItems([
+            "deepseek-chat", "deepseek-reasoner",
+            "gpt-4o-mini", "gpt-4o",
+            "qwen-plus", "qwen-turbo",
+        ])
+        self.model_input.setEditable(True)
+        model_label = QLabel()
+        register_widget(model_label, "model_label")
+        ai_layout.addRow(model_label, self.model_input)
+
+        # 任务
         task_layout = QHBoxLayout()
-        
         self.task_input = QComboBox()
         tasks = [
-            _("task_explore"), # Assuming keys like task_explore exist in i18n
-            _("task_collect"),
-            _("task_build"),
-            _("task_farm"),
-            _("task_mine"),
-            _("task_craft"),
-            _("task_combat"),
-            _("task_free")
-        ] # Need to define these keys in i18n.py
-          # Let's keep the original task strings for now, as they seem to be keys used elsewhere
-        tasks_keys_original = [
             "1. 探索世界", "2. 收集资源", "3. 建造房屋", "4. 种植农作物",
-            "5. 挖矿", "6. 制作物品", "7. 战斗", "8. 自由行动"
+            "5. 挖矿", "6. 制作物品", "7. 战斗", "8. 自由行动",
         ]
-        self.task_input.addItems(tasks_keys_original)
+        self.task_input.addItems(tasks)
         self.task_input.setCurrentText("3. 建造房屋")
         self.task_input.setEditable(True)
         self.task_input.setInsertPolicy(QComboBox.InsertPolicy.InsertAtBottom)
         task_layout.addWidget(self.task_input)
-        
-        # 添加保存任务按钮
+
         save_task_btn = QPushButton()
         register_widget(save_task_btn, "save_task_button")
-        register_widget(save_task_btn, "save_task_tooltip", attr="toolTip")
         save_task_btn.clicked.connect(self.save_custom_task)
         save_task_btn.setMaximumWidth(60)
         task_layout.addWidget(save_task_btn)
-        
-        ai_layout.addRow("初始任务:", task_layout)
-        
-        self.steps_input = QSpinBox()
-        self.steps_input.setRange(1, 1000)
-        self.steps_input.setValue(100)
-        steps_label = QLabel()
-        register_widget(steps_label, "steps_label")
-        ai_layout.addRow(steps_label, self.steps_input)
-        
+
+        initial_task_label = QLabel()
+        register_widget(initial_task_label, "initial_task_label")
+        ai_layout.addRow(initial_task_label, task_layout)
+
+        # 步间延迟 (步数已移除, AI 持续运行)
         self.delay_input = QSpinBox()
         self.delay_input.setRange(1, 60)
         self.delay_input.setValue(2)
         delay_label = QLabel()
         register_widget(delay_label, "delay_label")
         ai_layout.addRow(delay_label, self.delay_input)
-        
-        # 添加温度设置
+
+        # 温度
         self.temperature_input = QDoubleSpinBox()
-        self.temperature_input.setRange(0.1, 1.0)
+        self.temperature_input.setRange(0.0, 2.0)
         self.temperature_input.setValue(0.7)
         self.temperature_input.setSingleStep(0.1)
         temperature_label = QLabel()
         register_widget(temperature_label, "temperature_label")
         ai_layout.addRow(temperature_label, self.temperature_input)
-        
-        # 添加最大令牌数
+
+        # Max tokens
         self.max_tokens_input = QSpinBox()
-        self.max_tokens_input.setRange(100, 4096)
+        self.max_tokens_input.setRange(100, 8192)
         self.max_tokens_input.setValue(2048)
         max_tokens_label = QLabel()
         register_widget(max_tokens_label, "max_tokens_label")
         ai_layout.addRow(max_tokens_label, self.max_tokens_input)
-        
-        # 添加复选框选项在一个组中
-        options_group = QGroupBox()
-        register_widget(options_group, "ai_options_group", attr="title")
-        options_layout_container = QVBoxLayout() # Use a container layout
-        options_group.setLayout(options_layout_container)
 
-        # 创建选项布局
-        options_checkbox_layout = QHBoxLayout() # Layout for checkboxes
-
-        # 添加各种选项复选框
-        self.use_local_model = QCheckBox()
-        register_widget(self.use_local_model, "use_local_model_checkbox")
-        options_checkbox_layout.addWidget(self.use_local_model)
+        # 选项
+        options_layout = QHBoxLayout()
 
         self.use_cache = QCheckBox()
         register_widget(self.use_cache, "use_cache_checkbox")
-        self.use_cache.setChecked(True)  # 默认启用
-        options_checkbox_layout.addWidget(self.use_cache)
+        self.use_cache.setChecked(True)
+        options_layout.addWidget(self.use_cache)
 
         self.use_prediction = QCheckBox()
         register_widget(self.use_prediction, "use_prediction_checkbox")
-        self.use_prediction.setChecked(True)  # 默认启用
-        options_checkbox_layout.addWidget(self.use_prediction)
+        self.use_prediction.setChecked(True)
+        options_layout.addWidget(self.use_prediction)
 
-        # 将选项布局添加到主布局
-        ai_layout.addRow("AI选项:", options_checkbox_layout)
-        
+        ai_options_label = QLabel()
+        register_widget(ai_options_label, "ai_options_label")
+        ai_layout.addRow(ai_options_label, options_layout)
+
         ai_group.setLayout(ai_layout)
         layout.addWidget(ai_group)
-        
-        # 修改视觉系统配置组
-        vision_group = QGroupBox()
-        register_widget(vision_group, "vision_group", attr="title")
-        vision_layout = QFormLayout()
-        
-        self.use_vision = QCheckBox()
-        self.use_vision.setChecked(True)  # 默认启用
-        vision_checkbox_label = QLabel()
-        register_widget(vision_checkbox_label, "use_vision_checkbox")
-        vision_layout.addRow(vision_checkbox_label, self.use_vision)
-        
-        # 替换简单的模型选择为包含详细信息的选择
-        self.vision_model = QComboBox()
-        # 清除现有项目
-        self.vision_model.clear()
-        # 添加带详细信息的项目
-        self.vision_model.addItem(_("vision_model_resnet"), "ResNet18")
-        self.vision_model.addItem(_("vision_model_mobilenet"), "MobileNet")
-        self.vision_model.addItem(_("vision_model_custom"), "自定义")
-        vision_model_label = QLabel()
-        register_widget(vision_model_label, "vision_model_label")
-        vision_layout.addRow(vision_model_label, self.vision_model)
-        
-        vision_group.setLayout(vision_layout)
-        layout.addWidget(vision_group)
-        
+
         # 保存按钮
         save_button = QPushButton()
         register_widget(save_button, "save_config_button")
         save_button.clicked.connect(self.save_config)
         layout.addWidget(save_button)
 
+    # ── 语言切换 ──────────────────────────────────────────
+
     def language_changed(self, text):
         lang_code = self.lang_combo.currentData()
         if lang_code:
-            print(f"Language change requested: {text} ({lang_code})")
             set_language(lang_code)
-            # Force immediate update of registered widgets
             update_ui_texts()
-            # Update specific items not handled by registration if needed
-            self.update_dynamic_texts() # Example: update vision model combo box text
 
-    def update_dynamic_texts(self):
-        """Update texts that might not be covered by simple registration."""
-        # Example: Re-translate vision model combo box items
-        current_data = self.vision_model.currentData()
-        self.vision_model.blockSignals(True) # Prevent signal emission during update
-        self.vision_model.clear()
-        self.vision_model.addItem(_("vision_model_resnet"), "ResNet18")
-        self.vision_model.addItem(_("vision_model_mobilenet"), "MobileNet")
-        self.vision_model.addItem(_("vision_model_custom"), "自定义")
-        # Restore selection
-        index = self.vision_model.findData(current_data)
-        if index != -1:
-            self.vision_model.setCurrentIndex(index)
-        self.vision_model.blockSignals(False)
-        # Add other dynamic updates here if necessary
+    # ── 日志 ──────────────────────────────────────────────
 
     def setup_logging(self):
         self.log_signal.connect(self.append_log)
         handler = LogHandler(self.log_signal)
-        
-        # Get root logger
+
         root_logger = logging.getLogger()
         root_logger.addHandler(handler)
         root_logger.setLevel(logging.INFO)
 
-        # Also configure our specific logger if needed
         self.logger = logging.getLogger("MinecraftAI.GUI")
-        # self.logger.addHandler(handler) # Avoid duplicate handlers if root adds it
         self.logger.setLevel(logging.INFO)
 
     def append_log(self, message_data):
-        # Check if it's a tuple (key, args) or just a string
         if isinstance(message_data, tuple) and len(message_data) == 2:
             key, args = message_data
-            formatted_message = _(key, **args)
+            text = _(key, **args)
         elif isinstance(message_data, str):
-            # Try to handle simple keys passed as string? Or just display raw?
-            # Let's assume strings are already formatted or non-translatable
-            formatted_message = message_data
+            text = message_data
         else:
-            formatted_message = str(message_data) # Fallback
-
-        self.log_text.append(formatted_message)
+            text = str(message_data)
+        self.log_text.append(text)
         self.log_text.verticalScrollBar().setValue(
             self.log_text.verticalScrollBar().maximum()
         )
 
+    # ── 配置加载/保存 ────────────────────────────────────
+
     def load_language_preference(self):
-        """Load language preference from config before UI setup."""
-        lang = DEFAULT_LANG # Default
+        lang = DEFAULT_LANG
         try:
-            config_path = Path("config.json")
-            if config_path.exists():
-                with open(config_path, "r") as f:
-                    config = json.load(f)
-                    lang = config.get("gui", {}).get("language", DEFAULT_LANG)
-        except Exception as e:
-            print(f"Error loading language preference: {e}")
-        # Set language using the loaded preference or default
-        # This needs to happen before widgets are created if they are registered in setup methods
+            p = Path("config.json")
+            if p.exists():
+                with open(p, "r") as f:
+                    lang = json.load(f).get("gui", {}).get("language", DEFAULT_LANG)
+        except Exception:
+            pass
         set_language(lang)
 
     def load_config(self):
         try:
-            config_path = Path("config.json")
-            if config_path.exists():
-                with open(config_path, "r") as f:
-                    config = json.load(f)
-                    
-                # Load language first
-                gui_config = config.get("gui", {})
-                lang_code = gui_config.get("language", get_current_language()) # Use current if not found
-                set_language(lang_code)
-                # Update combo box selection without triggering signal
-                index = self.lang_combo.findData(lang_code)
-                if index != -1:
-                    self.lang_combo.blockSignals(True)
-                    self.lang_combo.setCurrentIndex(index)
-                    self.lang_combo.blockSignals(False)
+            p = Path("config.json")
+            if not p.exists():
+                self.save_config()
+                return
 
-                # Load other configs...
-                mc_config = config.get("minecraft", {})
-                self.host_input.setText(mc_config.get("host", "localhost"))
-                self.port_input.setValue(mc_config.get("port", 25565))
-                self.username_input.setText(mc_config.get("username", "AI_Player"))
-                
-                # 加载新增的Minecraft配置
-                self.version_input.setCurrentText(mc_config.get("version", "1.21.1"))
-                self.view_distance_input.setValue(mc_config.get("viewDistance", 8))
-                self.chat_limit_input.setValue(mc_config.get("chatLengthLimit", 100))
-                self.auto_reconnect.setChecked(mc_config.get("autoReconnect", True))
-                self.reconnect_delay.setValue(mc_config.get("reconnectDelay", 5000))
-                
-                # 加载服务器配置
-                server_config = config.get("server", {})
-                self.server_host_input.setText(server_config.get("host", "localhost"))
-                self.server_port_input.setValue(server_config.get("port", 3002))
-                
-                # 加载AI配置
-                ai_config = config.get("ai", {})
-                self.api_key_input.setText(ai_config.get("api_key", ""))
-                self.task_input.setCurrentText(ai_config.get("initial_task", "3. 建造房屋"))
-                self.steps_input.setValue(ai_config.get("steps", 100))
-                self.delay_input.setValue(ai_config.get("delay", 2))
-                self.temperature_input.setValue(ai_config.get("temperature", 0.7))
-                self.max_tokens_input.setValue(ai_config.get("max_tokens", 2048))
-                
-                # 加载视觉系统配置
-                vision_config = config.get("vision", {})
-                self.use_vision.setChecked(vision_config.get("use_vision", True))
-                
-                # 根据保存的模型值选择正确的项目
-                model_value = vision_config.get("vision_model", "ResNet18")
-                for i in range(self.vision_model.count()):
-                    if self.vision_model.itemData(i) == model_value:
-                        self.vision_model.setCurrentIndex(i)
-                        break
-                
-                self.logger.info(_("log_config_loaded")) # Use translated log
-            else:
-                self.logger.info(_("log_default_config_created"))
-                self.save_config() # Save default config (which includes default lang)
-                # Ensure default lang is set in UI
-                set_language(DEFAULT_LANG)
-                index = self.lang_combo.findData(DEFAULT_LANG)
-                if index != -1:
-                    self.lang_combo.blockSignals(True)
-                    self.lang_combo.setCurrentIndex(index)
-                    self.lang_combo.blockSignals(False)
+            with open(p, "r") as f:
+                config = json.load(f)
 
-        except Exception as e:
-            self.logger.error(_("log_config_load_failed", error=str(e)))
-            # Attempt to save a default config on load failure too
-            self.save_config()
-            set_language(DEFAULT_LANG)
-            index = self.lang_combo.findData(DEFAULT_LANG)
-            if index != -1:
+            # GUI
+            gui_config = config.get("gui", {})
+            lang_code = gui_config.get("language", get_current_language())
+            set_language(lang_code)
+            idx = self.lang_combo.findData(lang_code)
+            if idx != -1:
                 self.lang_combo.blockSignals(True)
-                self.lang_combo.setCurrentIndex(index)
+                self.lang_combo.setCurrentIndex(idx)
                 self.lang_combo.blockSignals(False)
+
+            # Minecraft
+            mc = config.get("minecraft", {})
+            self.host_input.setText(mc.get("host", "localhost"))
+            self.port_input.setValue(mc.get("port", 25565))
+            self.username_input.setText(mc.get("username", "AI_Player"))
+            self.version_input.setCurrentText(mc.get("version", "1.21.1"))
+            self.view_distance_input.setValue(mc.get("viewDistance", 8))
+            self.chat_limit_input.setValue(mc.get("chatLengthLimit", 100))
+            self.auto_reconnect.setChecked(mc.get("autoReconnect", True))
+            self.reconnect_delay.setValue(mc.get("reconnectDelay", 5000))
+
+            # Server
+            srv = config.get("server", {})
+            self.server_host_input.setText(srv.get("host", "localhost"))
+            self.server_port_input.setValue(srv.get("port", 3002))
+
+            # AI
+            ai = config.get("ai", {})
+            self.api_key_input.setText(ai.get("api_key", ""))
+            self.base_url_input.setText(ai.get("base_url", "https://api.deepseek.com/v1"))
+            self.model_input.setCurrentText(ai.get("model", "deepseek-chat"))
+            self.task_input.setCurrentText(ai.get("initial_task", "3. 建造房屋"))
+            self.delay_input.setValue(ai.get("delay", 2))
+            self.temperature_input.setValue(ai.get("temperature", 0.7))
+            self.max_tokens_input.setValue(ai.get("max_tokens", 2048))
+            self.use_cache.setChecked(ai.get("use_cache", True))
+            self.use_prediction.setChecked(ai.get("use_prediction", True))
+
+            self.logger.info(_("log_config_loaded"))
+        except Exception as e:
+            self.logger.error(f"加载配置失败: {e}")
 
     def save_config(self):
         try:
             config = {
-                "deepseek_api_key": self.api_key_input.text(),
                 "minecraft": {
                     "host": self.host_input.text(),
                     "port": self.port_input.value(),
                     "username": self.username_input.text(),
                     "version": self.version_input.currentText(),
-                    "viewDistance": self.view_distance_input.value(),  # 使用数字而不是字符串
+                    "viewDistance": self.view_distance_input.value(),
                     "chatLengthLimit": self.chat_limit_input.value(),
                     "autoReconnect": self.auto_reconnect.isChecked(),
-                    "reconnectDelay": self.reconnect_delay.value()
-                },
-                "ai": {
-                    "api_key": self.api_key_input.text(),
-                    "initial_task": self.task_input.currentText(),
-                    "steps": self.steps_input.value(),
-                    "delay": self.delay_input.value(),
-                    "temperature": self.temperature_input.value(),
-                    "max_tokens": self.max_tokens_input.value(),
-                    "memory_capacity": 20,
-                    "learning_enabled": True
+                    "reconnectDelay": self.reconnect_delay.value(),
                 },
                 "server": {
                     "host": self.server_host_input.text(),
-                    "port": self.server_port_input.value()
+                    "port": self.server_port_input.value(),
                 },
-                "vision": {
-                    "use_vision": self.use_vision.isChecked(),
-                    "vision_model": self.vision_model.currentData(),  # 使用数据值而不是显示文本
-                }
+                "ai": {
+                    "api_key": self.api_key_input.text(),
+                    "base_url": self.base_url_input.text(),
+                    "model": self.model_input.currentText(),
+                    "initial_task": self.task_input.currentText(),
+                    "delay": self.delay_input.value(),
+                    "temperature": self.temperature_input.value(),
+                    "max_tokens": self.max_tokens_input.value(),
+                    "use_cache": self.use_cache.isChecked(),
+                    "use_prediction": self.use_prediction.isChecked(),
+                },
+                "gui": {
+                    "language": get_current_language(),
+                },
             }
-            
             with open("config.json", "w") as f:
                 json.dump(config, f, indent=2)
-            
             self.logger.info(_("log_config_saved"))
         except Exception as e:
-            self.logger.error(_("log_config_save_failed", error=str(e)))
+            self.logger.error(f"保存配置失败: {e}")
+
+    # ── 网络操作 ──────────────────────────────────────────
 
     def get_server_url(self):
-        """获取服务器URL"""
         host = self.server_host_input.text()
         port = self.server_port_input.value()
         return f"http://{host}:{port}"
@@ -743,384 +833,358 @@ class MainWindow(QMainWindow):
         self.status_label.setText(_("status_connecting"))
         self.logger.info(_("log_test_connection_started"))
 
-        self.conn_thread = ConnectionThread(
-            f"{self.get_server_url()}/status",
-            5
-        )
-        self.conn_thread.status_signal.connect(lambda msg_key: self.logger.info(_(msg_key)))
+        self.conn_thread = ConnectionThread(f"{self.get_server_url()}/status")
         self.conn_thread.finished_signal.connect(self.connection_finished)
         self.conn_thread.start()
 
     def connection_finished(self, success):
         self.test_conn_button.setEnabled(True)
-        result_key = "log_test_connection_success" if success else "log_test_connection_failure"
-        result_text = _(result_key)
-        self.status_label.setText(_("status_connected") if success else _("status_connection_failed"))
-        self.logger.info(_("log_test_connection_result", result=result_text))
+        if success:
+            self.status_label.setText(_("status_connected"))
+            self.logger.info("连接成功")
+        else:
+            self.status_label.setText(_("status_connection_failed"))
+            self.logger.warning("连接失败")
 
-    def check_server_connection(self, max_retries=3):
-        """检查服务器连接状态"""
-        server_url = self.get_server_url()
-        
-        for i in range(max_retries):
-            try:
-                response = requests.get(f"{server_url}/bot/status", timeout=10)
-                if response.status_code == 200:
-                    return True
-                
-                time.sleep(1)  # 失败后等待1秒再重试
-            except Exception as e:
-                logging.warning(f"连接服务器失败 (尝试 {i+1}/{max_retries}): {e}")
-                time.sleep(2)  # 失败后等待2秒再重试
-            
-        return False
+    def test_llm_connection(self):
+        """测试 LLM API 连接"""
+        api_key = self.api_key_input.text().strip()
+        base_url = self.base_url_input.text().strip()
+        model = self.model_input.currentText().strip()
+        if not api_key:
+            QMessageBox.warning(self, _("error_dialog_title"), _("llm_test_no_key"))
+            return
+        self.test_llm_button.setEnabled(False)
+        self.logger.info(_("llm_test_started"))
+        self._llm_test_worker = LLMTestWorker(base_url, api_key, model)
+        self._llm_test_worker.success.connect(self._on_llm_test_success)
+        self._llm_test_worker.error.connect(self._on_llm_test_error)
+        self._llm_test_worker.start()
+
+    def _on_llm_test_success(self, msg):
+        self.test_llm_button.setEnabled(True)
+        self.logger.info(f"LLM 连接成功: {msg}")
+        QMessageBox.information(self, _("llm_test_success_title"), msg)
+
+    def _on_llm_test_error(self, err):
+        self.test_llm_button.setEnabled(True)
+        self.logger.error(f"LLM 连接失败: {err}")
+        QMessageBox.critical(self, _("llm_test_fail_title"), err)
+
+    def sync_config_to_bot(self):
+        self.logger.info(_("log_sync_config_started"))
+        self.sync_config_button.setEnabled(False)
+        try:
+            self.save_config()
+            with open("config.json", "r") as f:
+                config_data = json.load(f)
+            self._sync_worker = HttpWorker("POST", f"{self.get_server_url()}/config", payload=config_data, timeout=5)
+            self._sync_worker.success.connect(self._on_sync_success)
+            self._sync_worker.error.connect(self._on_sync_error)
+            self._sync_worker.start()
+        except Exception as e:
+            self.sync_config_button.setEnabled(True)
+            self.logger.error(f"同步失败: {e}")
+            QMessageBox.critical(self, _("error_dialog_title"), str(e))
+
+    def _on_sync_success(self, data):
+        self.sync_config_button.setEnabled(True)
+        self.logger.info(_("log_sync_config_success"))
+
+    def _on_sync_error(self, err):
+        self.sync_config_button.setEnabled(True)
+        self.logger.error(f"同步失败: {err}")
+        QMessageBox.critical(self, _("error_dialog_title"), err)
+
+    # ── AI 控制 ──────────────────────────────────────────
 
     def start_ai(self):
         try:
             self.save_config()
-            self.logger.info(_("log_config_saved")) # Config saved is already logged by save_config
             self.logger.info(_("log_ai_starting"))
-
-            # Check server connection (internal logs might need translation if made visible)
-            # server_url = f"{self.get_server_url()}/status"
-            # if not self.test_server_connection(server_url): # This method logs internally
-                 # bot_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bot')
-                 # log_msg = _("log_bot_server_not_detected", bot_dir=bot_dir)
-                 # self.logger.error(log_msg)
-                 # QMessageBox.critical(self, _("error_dialog_title"), log_msg)
-                 # return # Stop if server not connected
-                 # Let's allow starting AI even if server test fails, agent might handle connection
-
-            # Create AI agent (agent logs internally, maybe pass logger or signal)
-            from ai.agent import MinecraftAgent
-            from ai.deepseek_api import DeepSeekAPI # Or choose based on config
-
-            # Decide API or Local based on checkbox
-            if self.use_local_model.isChecked():
-                # Logic for local model instantiation if needed
-                # Assuming MinecraftAgent handles local model logic internally based on env/config
-                api_client = None # Or a local model client instance
-                self.logger.info("Using local model (assumption: Agent handles this).")
-            else:
-                 api_client = DeepSeekAPI(self.api_key_input.text())
-                 self.logger.info("Using DeepSeek API.")
-
-            # Pass api_client (can be None for local model if Agent handles it)
-            self.agent = MinecraftAgent(api_client)
-            self.agent.set_task(self.task_input.currentText())
-
             self.start_button.setEnabled(False)
+
+            # 自动启动 bot 服务器 (如果未运行)
+            if not (self.bot_server_thread and self.bot_server_thread.isRunning()):
+                self.start_bot_server()
+
+            # 在工作线程中等待 bot 就绪, 完成后回调 _on_bot_ready_for_ai
+            self.logger.info(_("log_bot_waiting"))
+            self._bot_ready_worker = BotReadyWorker(f"{self.get_server_url()}/status", max_attempts=20)
+            self._bot_ready_worker.ready.connect(self._on_bot_ready_for_ai)
+            self._bot_ready_worker.failed.connect(self._on_bot_ready_failed)
+            self._bot_ready_worker.start()
+
+        except Exception as e:
+            self.logger.error(f"启动失败: {e}")
+            QMessageBox.critical(self, _("error_dialog_title"), str(e))
+            self._finish_stopping()
+
+    def _on_bot_ready_for_ai(self):
+        """Bot 就绪后, 在主线程中创建 Agent 和 AIThread"""
+        try:
+            with open("config.json", "r") as f:
+                config = json.load(f)
+
+            ai_cfg = config.get("ai", {})
+
+            from ai.llm_client import LLMClient
+            from ai.agent import MinecraftAgent
+
+            llm = LLMClient(
+                api_key=ai_cfg.get("api_key", ""),
+                base_url=ai_cfg.get("base_url", "https://api.deepseek.com/v1"),
+                model=ai_cfg.get("model", "deepseek-chat"),
+                temperature=ai_cfg.get("temperature", 0.7),
+                max_tokens=ai_cfg.get("max_tokens", 2048),
+            )
+
+            self.agent = MinecraftAgent(config, llm)
+            self.agent.set_task(ai_cfg.get("initial_task", "自由行动"))
+
             self.stop_button.setEnabled(True)
+            self.change_task_button.setEnabled(True)
             self.bot_status_label.setText(_("status_bot_running"))
 
-            # Create AI Thread
-            self.ai_thread = AIThread(self.agent, self.steps_input.value(), self.delay_input.value())
-            # Connect log signal to handle translated logs
-            self.ai_thread.log_signal.connect(self.append_log) # Already connected?
-            # self.ai_thread.update_signal.connect(self.update_status)
+            self.ai_thread = AIThread(
+                self.agent,
+                ai_cfg.get("delay", 2),
+            )
+            self.ai_thread.log_signal.connect(self.append_log)
+            self.ai_thread.update_signal.connect(self.update_status)
+            self.ai_thread.pause_signal.connect(self._on_ai_paused)
             self.ai_thread.finished.connect(self.on_ai_finished)
             self.ai_thread.start()
 
             self.logger.info(_("log_ai_started"))
-
         except Exception as e:
-            error_msg = _("log_ai_start_failed", error=str(e))
-            self.logger.error(error_msg)
-            QMessageBox.critical(self, _("error_dialog_title"), error_msg)
-            self.stop_ai() # Ensure UI resets
+            self.logger.error(f"启动失败: {e}")
+            QMessageBox.critical(self, _("error_dialog_title"), str(e))
+            self._finish_stopping()
 
-    def start_bot_server(self):
-        """Checks bot server connection, logs translated messages."""
-        try:
-            self.save_config() # Save latest config first
-            # self.logger.info(_("log_config_saved")) # Already logged
-
-            server_url = f"{self.get_server_url()}/status"
-            if not self.test_server_connection(server_url):
-                bot_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bot')
-                log_msg = _("log_bot_server_not_detected", bot_dir=bot_dir)
-                self.logger.error(log_msg)
-                raise Exception(log_msg) # Raise exception with translated message
-
-            self.logger.info(_("log_server_connection_success"))
-
-        except Exception as e:
-            self.logger.error(f"{_('log_ai_start_failed', error=str(e))}") # Use generic start failed
-            raise # Re-raise the exception
-
-    def test_server_connection(self, url, max_attempts=5):
-        """Tests server connection with translated logs."""
-        for i in range(max_attempts):
-            try:
-                response = requests.get(url, timeout=2)
-                if response.status_code == 200:
-                    self.logger.info(_("log_server_connection_success"))
-                    return True
-            except RequestException as e:
-                 # Log simple connection error, avoid too much detail here
-                 self.logger.debug(f"Connection attempt {i+1} failed: {e}")
-                 pass # Fall through to retry message
-
-            if i < max_attempts - 1:
-                self.logger.info(_("log_server_connection_failed_retrying", attempt=i+1, max_attempts=max_attempts))
-                time.sleep(2)
-
-        # Log final failure after retries
-        # self.logger.error(_("log_connection_error", error="Max retries reached")) # Or a specific message
-        return False
-
-    def stop_ai(self):
-        """Stops the AI thread."""
-        self.logger.info(_("log_ai_stopping"))
-        try:
-            if hasattr(self, 'ai_thread') and self.ai_thread.isRunning():
-                self.ai_thread.terminate() # Use terminate for now, though join is safer
-                self.ai_thread.wait() # Wait for thread to finish
-
-            # Stop chat timer if exists
-            if hasattr(self, 'chat_timer') and self.chat_timer.isActive():
-                self.chat_timer.stop()
-
-        except Exception as e:
-            self.logger.error(_("log_ai_stop_failed", error=str(e)))
-        finally:
-             # Ensure UI is updated regardless of success/failure
-             self._finish_stopping()
-
-    def _check_thread_stopped(self):
-        # This might not be needed if using terminate/wait or join
-        pass
-
-    def _finish_stopping(self):
-        """Finalizes the stopping process and updates UI."""
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        self.bot_status_label.setText(_("status_bot_stopped"))
-        self.agent = None
-        self.logger.info(_("log_ai_stopped"))
-
-    def on_ai_finished(self):
-        """Called when AI thread finishes naturally."""
-        self.logger.info(_("log_ai_completed"))
+    def _on_bot_ready_failed(self, reason):
+        """Bot 就绪超时"""
+        self.logger.error(_("log_bot_wait_timeout"))
+        QMessageBox.critical(self, _("error_dialog_title"), reason)
         self._finish_stopping()
 
-    def sync_config_to_bot(self):
-        self.logger.info(_("log_sync_config_started"))
+    def _on_ai_paused(self, reason):
+        """AI 自动暂停时的处理"""
+        self.logger.warning(_("log_ai_auto_paused", reason=reason))
+        self.bot_status_label.setText(_("status_ai_paused"))
+        QMessageBox.warning(self, _("error_dialog_title"), reason)
+
+    def stop_ai(self):
+        self.logger.info(_("log_ai_stopping"))
         try:
-            self.save_config() # Save latest config locally first
-
-            server_url = f"{self.get_server_url()}/config"
-            try:
-                with open("config.json", "r") as f:
-                    config_data = json.load(f)
-
-                response = requests.post(server_url, json=config_data, timeout=5)
-
-                if response.status_code == 200:
-                    self.logger.info(_("log_sync_config_success"))
-                else:
-                    raise Exception(f"Server returned error: {response.status_code} - {response.text}")
-
-            except requests.exceptions.ConnectionError:
-                bot_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'bot')
-                error_msg = _("log_bot_server_not_detected", bot_dir=bot_dir)
-                self.logger.error(error_msg)
-                QMessageBox.critical(self, _("error_dialog_title"), error_msg)
-            except Exception as e:
-                 # Catch other potential errors during sync process
-                 error_msg = _("log_sync_config_failed", error=str(e))
-                 self.logger.error(error_msg)
-                 QMessageBox.critical(self, _("error_dialog_title"), error_msg)
-
+            if self.ai_thread and self.ai_thread.isRunning():
+                self.ai_thread.stop()
+                self.ai_thread.wait(5000)
+            if self.agent:
+                self.agent.shutdown()
         except Exception as e:
-             # Catch errors during the initial save_config or URL generation
-             error_msg = _("log_sync_config_failed", error=str(e))
-             self.logger.error(error_msg)
-             QMessageBox.critical(self, _("error_dialog_title"), error_msg)
+            self.logger.error(f"停止异常: {e}")
+        finally:
+            self._finish_stopping()
 
-    def save_custom_task(self):
-        custom_task = self.task_input.currentText()
-        
-        # 检查是否已存在
-        found = False
-        for i in range(self.task_input.count()):
-            if self.task_input.itemText(i) == custom_task:
-                found = True
-                break
-        
-        # 如果不存在，添加到列表
-        if not found and custom_task.strip():
-            self.task_input.addItem(custom_task)
-            
-            # 保存到本地文件
-            try:
-                tasks_file = "custom_tasks.txt"
-                with open(tasks_file, "a+", encoding="utf-8") as f:
-                    f.seek(0)  # 先定位到文件开头
-                    existing_tasks = f.read().splitlines()
-                    if custom_task not in existing_tasks:
-                        f.write(f"{custom_task}\n")
-                self.logger.info(_("log_custom_task_saved", task=custom_task))
-            except Exception as e:
-                self.logger.error(_("log_custom_task_save_failed", error=str(e)))
+    def on_ai_finished(self):
+        self.logger.info(_("log_ai_completed"))
+        if self.agent:
+            self.agent.shutdown()
+        self._finish_stopping()
 
-    def load_custom_tasks(self):
+    def _finish_stopping(self):
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        self.change_task_button.setEnabled(False)
+        self.bot_status_label.setText(_("status_bot_stopped"))
+        self.agent = None
+        self.ai_thread = None
+
+    def update_status(self, data):
+        if not isinstance(data, dict):
+            return
+        if data.get("status") is False and data.get("error"):
+            self.bot_status_label.setText(_("status_bot_error"))
+
+    # ── Bot 服务器管理 ─────────────────────────────────────
+
+    def start_bot_server(self):
+        """启动 Node.js bot 子进程"""
+        if self.bot_server_thread and self.bot_server_thread.isRunning():
+            self.logger.warning(_("log_bot_already_running"))
+            return
+
+        bot_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bot")
+        if not os.path.exists(os.path.join(bot_dir, "index.js")):
+            self.logger.error(f"Bot 目录不存在: {bot_dir}")
+            return
+
+        self.logger.info(_("log_bot_starting"))
+        self.start_bot_button.setEnabled(False)
+        self.stop_bot_button.setEnabled(True)
+        self.bot_status_label.setText(_("status_bot_starting"))
+
+        self.bot_server_thread = BotServerThread(bot_dir)
+        self.bot_server_thread.output_signal.connect(self.append_log)
+        self.bot_server_thread.ready_signal.connect(self._on_bot_ready)
+        self.bot_server_thread.stopped_signal.connect(self._on_bot_stopped)
+        self.bot_server_thread.start()
+
+    def stop_bot_server(self):
+        """停止 Node.js bot 子进程"""
+        if self.bot_server_thread and self.bot_server_thread.isRunning():
+            self.logger.info(_("log_bot_stopping"))
+            self.bot_server_thread.stop()
+            self.bot_server_thread.wait(8000)
+        self._on_bot_stopped()
+
+    def _on_bot_ready(self):
+        self.bot_status_label.setText(_("status_bot_running"))
+        self.status_label.setText(_("status_connected"))
+        self.logger.info(_("log_bot_ready"))
+        # 启动状态轮询定时器
+        self._start_status_polling()
+
+    def _on_bot_stopped(self):
+        self.start_bot_button.setEnabled(True)
+        self.stop_bot_button.setEnabled(False)
+        self.bot_status_label.setText(_("status_bot_stopped"))
+        self._stop_status_polling()
+
+    # ── Bot 状态轮询 ─────────────────────────────────────
+
+    def _start_status_polling(self):
+        if self.status_timer is None:
+            self.status_timer = QTimer(self)
+            self.status_timer.timeout.connect(self._poll_bot_status)
+        self.status_timer.start(5000)
+
+    def _stop_status_polling(self):
+        if self.status_timer:
+            self.status_timer.stop()
+        self.bot_health_label.setText("--")
+        self.bot_food_label.setText("--")
+        self.bot_position_label.setText("--")
+        self.bot_inventory_label.setText("--")
+
+    def _poll_bot_status(self):
+        # 如果上一个轮询 worker 还在运行, 跳过本轮
+        if self._poll_worker and self._poll_worker.isRunning():
+            return
+        self._poll_worker = HttpWorker("GET", f"{self.get_server_url()}/bot/status", timeout=3)
+        self._poll_worker.success.connect(self._on_poll_result)
+        self._poll_worker.error.connect(lambda _: None)  # 静默
+        self._poll_worker.start()
+
+    def _on_poll_result(self, data):
         try:
-            tasks_file = "custom_tasks.txt"
-            if os.path.exists(tasks_file):
-                with open(tasks_file, "r", encoding="utf-8") as f:
-                    custom_tasks = f.read().splitlines()
-                    for task in custom_tasks:
-                        if task.strip() and not any(task == self.task_input.itemText(i) for i in range(self.task_input.count())):
-                            self.task_input.addItem(task)
-        except Exception as e:
-            self.logger.error(_("log_load_custom_tasks_failed", error=str(e)))
+            if data.get("connected") and data.get("state"):
+                state = data["state"]
+                hp = state.get("health", 0)
+                food = state.get("food", 0)
+                pos = state.get("position")
+                inv = state.get("inventory", [])
+
+                self.bot_health_label.setText(f"{hp}/20")
+                self.bot_food_label.setText(f"{food}/20")
+                if pos:
+                    self.bot_position_label.setText(
+                        f"({pos.get('x', 0):.1f}, {pos.get('y', 0):.1f}, {pos.get('z', 0):.1f})"
+                    )
+                inv_summary = ", ".join(f"{i['name']}x{i['count']}" for i in inv[:5])
+                self.bot_inventory_label.setText(inv_summary or _("status_empty_inventory"))
+            else:
+                self.bot_health_label.setText("--")
+        except Exception:
+            pass
+
+    # ── 运行时任务修改 ────────────────────────────────────
+
+    def change_task_runtime(self):
+        new_task = self.runtime_task_input.text().strip()
+        if not new_task:
+            return
+        if self.agent:
+            self.agent.set_task(new_task)
+            self.logger.info(_("log_task_changed", task=new_task))
+            self.runtime_task_input.clear()
+        else:
+            self.logger.warning(_("log_ai_not_running"))
+
+    # ── 窗口关闭事件 ─────────────────────────────────────
+
+    def closeEvent(self, event):
+        """窗口关闭时清理所有资源"""
+        # 停止 AI
+        if self.ai_thread and self.ai_thread.isRunning():
+            self.ai_thread.stop()
+            self.ai_thread.wait(3000)
+        if self.agent:
+            try:
+                self.agent.shutdown()
+            except Exception:
+                pass
+
+        # 停止状态轮询
+        self._stop_status_polling()
+
+        # 停止 bot 服务器
+        if self.bot_server_thread and self.bot_server_thread.isRunning():
+            self.bot_server_thread.stop()
+            self.bot_server_thread.wait(5000)
+
+        event.accept()
+
+    # ── 聊天 ─────────────────────────────────────────────
 
     def send_chat(self):
         message = self.chat_input.text().strip()
         if not message:
             return
-        
         self.chat_input.clear()
-        # Use translated "You"
         self.chat_display.append(f"<b>{_('chat_message_self')}:</b> {message}")
-        
+        self._chat_worker = HttpWorker("POST", f"{self.get_server_url()}/bot/chat",
+                                       payload={"message": message}, timeout=5)
+        self._chat_worker.success.connect(
+            lambda data: None if data.get("success") else self.chat_display.append(
+                f"<span style='color:red'>{_('chat_send_failed')}</span>")
+        )
+        self._chat_worker.error.connect(
+            lambda err: self.chat_display.append(
+                f"<span style='color:red'>{_('chat_send_failed_network')}: {err}</span>")
+        )
+        self._chat_worker.start()
+
+    # ── 自定义任务 ────────────────────────────────────────
+
+    def save_custom_task(self):
+        task = self.task_input.currentText()
+        if not task.strip():
+            return
+        found = any(
+            self.task_input.itemText(i) == task
+            for i in range(self.task_input.count())
+        )
+        if not found:
+            self.task_input.addItem(task)
+            try:
+                with open("custom_tasks.txt", "a", encoding="utf-8") as f:
+                    f.write(f"{task}\n")
+                self.logger.info(f"已保存自定义任务: {task}")
+            except Exception as e:
+                self.logger.error(f"保存任务失败: {e}")
+
+    def load_custom_tasks(self):
         try:
-            server_url = self.get_server_url()
-            response = requests.post(
-                f"{server_url}/bot/chat",
-                json={"message": message},
-                timeout=5
-            )
-            
-            if response.status_code != 200:
-                self.chat_display.append(f"<span style='color:red'>{_('chat_send_failed')}</span>")
-        except Exception as e:
-            self.logger.error(f"{_('log_send_action_failed', error=str(e))}") # Generic send failed
-            self.chat_display.append(f"<span style='color:red'>{_('chat_send_failed_network')}</span>")
-
-    def update_chat(self):
-        try:
-            server_url = self.get_server_url()
-            response = requests.get(
-                f"{server_url}/bot/chat/history",
-                timeout=2
-            )
-            
-            if response.status_code == 200:
-                messages = response.json()
-                
-                # 只显示新消息
-                if not hasattr(self, 'last_message_id'):
-                    self.last_message_id = 0
-                    
-                for msg in messages:
-                    if msg['id'] > self.last_message_id:
-                        if msg['source'] == 'player':
-                            # 玩家消息已由send_chat方法添加
-                            pass
-                        else:
-                            # AI或其他玩家的消息
-                            self.chat_display.append(f"<b>{msg['username']}:</b> {msg['message']}")
-                        self.last_message_id = msg['id']
-        except Exception as e:
-            pass  # 静默失败，避免频繁错误消息
-
-    def update_status(self, update_data):
-        """Update AI status display based on structured data from AIThread."""
-        if not isinstance(update_data, dict):
-             self.logger.warning(f"Received invalid status update data: {update_data}")
-             return
-
-        status = update_data.get('status')
-        step = update_data.get('step')
-        total = update_data.get('total')
-        error = update_data.get('error')
-
-        if status is False and error:
-             self.bot_status_label.setText(_("status_bot_error"))
-             # Optionally display the error somewhere specific
-             # self.error_label.setText(_("log_ai_error", error=error))
-             # self.error_label.setStyleSheet("color: red;")
-             self.logger.error(_("log_ai_error", error=error))
-        elif step is not None and total is not None:
-             self.bot_status_label.setText(_("status_bot_running"))
-             # Update step progress if you add a dedicated label for it
-             # self.step_label.setText(_("log_ai_step", step=step, total=total))
-             # Log step progress less frequently to avoid spamming
-             if step % 5 == 0 or step == 1 or step == total:
-                 self.logger.info(_("log_ai_step", step=step, total=total))
-        elif self.bot_status_label.text() != _("status_bot_stopping"): # Avoid overriding stopping status
-             self.bot_status_label.setText(_("status_bot_running")) # Default to running if no specific status
-
-        # Clear error display if status is ok
-        # if status is not False and hasattr(self, 'error_label') and self.error_label.text():
-        #      self.error_label.setText("")
-
-    def download_vision_models(self):
-        self.logger.info(_("log_download_vision_models_started"))
-        self.download_models_button.setEnabled(False)
-        
-        download_thread = threading.Thread(target=self._download_models_thread)
-        download_thread.daemon = True
-        download_thread.start()
-
-    def _download_models_thread(self):
-        log_queue = [] # Use a queue for thread-safe logging
-        def thread_log(key, **kwargs):
-            log_queue.append((key, kwargs))
-
-        try:
-            from ai.vision_learning import VisionLearningSystem # Assuming this exists
-            # Pass the thread-safe logger to the system if it accepts one
-            system = VisionLearningSystem(logger_func=thread_log)
-
-            for model_name in system.MODEL_CONFIGS:
-                thread_log("log_download_vision_model_downloading", model_name=model_name)
-                local_path = system._download_model(model_name)
-                thread_log("log_download_vision_model_saved", local_path=local_path)
-
-            thread_log("log_download_vision_models_finished")
-        except ImportError:
-             thread_log("log_ai_error", error="VisionLearningSystem not found.") # Example error key
-        except Exception as e:
-            thread_log("log_download_vision_models_error", error=str(e))
-        finally:
-            # Process logs from the queue in the main thread
-            while log_queue:
-                key, kwargs = log_queue.pop(0)
-                self.logger.info(_(key, **kwargs))
-            # Re-enable button in main thread
-            QMetaObject.invokeMethod(self.download_models_button, "setEnabled",
-                                   Qt.ConnectionType.QueuedConnection, Q_ARG(bool, True))
-
-# 修改OutputReader类，添加启动完成信号
-class OutputReader(QObject):
-    output_received = pyqtSignal(str)
-    error_received = pyqtSignal(str)
-    server_started = pyqtSignal()  # 新增服务器启动信号
-    
-    def __init__(self, process):
-        super().__init__()
-        self.process = process
-        self.running = True
-        self.server_ready = False
-    
-    def read_output(self):
-        while self.running:
-            output = self.process.stdout.readline()
-            if output:
-                output = output.strip()
-                self.output_received.emit(output)
-                # 检查服务器是否已启动
-                if not self.server_ready and "服务器运行在" in output:
-                    self.server_ready = True
-                    self.server_started.emit()
-            error = self.process.stderr.readline()
-            if error:
-                self.error_received.emit(error.strip())
-            if not output and not error and self.process.poll() is not None:
-                break
-    
-    def stop(self):
-        self.running = False 
+            if os.path.exists("custom_tasks.txt"):
+                with open("custom_tasks.txt", "r", encoding="utf-8") as f:
+                    for line in f:
+                        task = line.strip()
+                        if task and not any(
+                            task == self.task_input.itemText(i)
+                            for i in range(self.task_input.count())
+                        ):
+                            self.task_input.addItem(task)
+        except Exception:
+            pass

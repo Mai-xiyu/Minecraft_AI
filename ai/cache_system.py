@@ -1,63 +1,87 @@
-import json
+"""
+缓存系统 —— 简单 key-value 缓存，带 TTL 和 LRU 淘汰
+"""
+
 import os
+import json
 import time
-import hashlib
+import logging
+from collections import OrderedDict
+
+logger = logging.getLogger(__name__)
+
 
 class CacheSystem:
-    """缓存系统，用于存储和复用API响应"""
-    
-    def __init__(self, cache_file="ai_cache.json", ttl=86400): # 默认缓存1天
+    """LRU 缓存，Agent 通过 get(key)/set(key, value) 访问"""
+
+    def __init__(self, cache_file="ai_cache.json", ttl=3600, max_size=1000):
         self.cache_file = cache_file
         self.ttl = ttl
-        self.cache = {}
-        self.load_cache()
-        
-    def load_cache(self):
-        """加载缓存"""
+        self.max_size = max_size
+        self.cache: OrderedDict[str, dict] = OrderedDict()
+        self._load()
+
+    # ── 持久化 ────────────────────────────────────────────
+
+    def _load(self):
         if os.path.exists(self.cache_file):
             try:
                 with open(self.cache_file, "r", encoding="utf-8") as f:
-                    self.cache = json.load(f)
+                    raw = json.load(f)
+                # 迁移旧格式: 没有 created_at 的条目补齐
+                for k, v in raw.items():
+                    if "created_at" not in v:
+                        v["created_at"] = v.get("ts", time.time())
+                    if "ts" not in v:
+                        v["ts"] = v.get("created_at", time.time())
+                self.cache = OrderedDict(raw)
             except Exception as e:
-                print(f"加载缓存失败: {e}")
-                self.cache = {}
-    
-    def save_cache(self):
-        """保存缓存"""
+                logger.warning("加载缓存失败: %s", e)
+                self.cache = OrderedDict()
+
+    def save(self):
         try:
             with open(self.cache_file, "w", encoding="utf-8") as f:
-                json.dump(self.cache, f, ensure_ascii=False, indent=2)
+                json.dump(dict(self.cache), f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"保存缓存失败: {e}")
-    
-    def get_cache_key(self, prompt, temperature, max_tokens):
-        """生成缓存键"""
-        # 使用哈希来避免过长的键
-        data = f"{prompt}|{temperature}|{max_tokens}"
-        return hashlib.md5(data.encode()).hexdigest()
-    
-    def get(self, prompt, temperature=0.7, max_tokens=2048):
-        """从缓存获取结果"""
-        key = self.get_cache_key(prompt, temperature, max_tokens)
-        if key in self.cache:
-            cached = self.cache[key]
-            # 检查是否过期
-            if time.time() - cached["timestamp"] < self.ttl:
-                print("使用缓存的响应")
-                return cached["response"]
-            else:
-                # 过期了，删除
-                del self.cache[key]
-                self.save_cache()
-        return None
-    
-    def put(self, prompt, response, temperature=0.7, max_tokens=2048):
-        """添加到缓存"""
-        key = self.get_cache_key(prompt, temperature, max_tokens)
-        self.cache[key] = {
-            "response": response,
-            "timestamp": time.time()
-        }
-        # 每10次更新保存一次，避免频繁IO
-        if len(self.cache) % 10 == 0:
-            self.save_cache() 
+            logger.warning("保存缓存失败: %s", e)
+
+    # ── get / set ─────────────────────────────────────────
+
+    def get(self, key: str):
+        """获取缓存值, 过期返回 None"""
+        entry = self.cache.get(key)
+        if entry is None:
+            return None
+        # TTL 基于 created_at (创建时间), 不随访问刷新
+        if time.time() - entry.get("created_at", 0) > self.ttl:
+            del self.cache[key]
+            return None
+        # LRU: 刷新访问时间并移到末尾
+        entry["ts"] = time.time()
+        self.cache.move_to_end(key)
+        return entry.get("val")
+
+    def set(self, key: str, value):
+        """写入缓存, 超容量时淘汰最久未访问的条目"""
+        now = time.time()
+        self.cache[key] = {"val": value, "ts": now, "created_at": now}
+        self.cache.move_to_end(key)
+        self._evict()
+        # 每 20 次写入持久化一次
+        if len(self.cache) % 20 == 0:
+            self.save()
+
+    # ── LRU 淘汰 ─────────────────────────────────────────
+
+    def _evict(self):
+        """淘汰最久未访问的条目 (OrderedDict 头部, O(1))"""
+        while len(self.cache) > self.max_size:
+            self.cache.popitem(last=False)
+
+    def clear(self):
+        self.cache = OrderedDict()
+        self.save()
+
+    def __len__(self):
+        return len(self.cache)

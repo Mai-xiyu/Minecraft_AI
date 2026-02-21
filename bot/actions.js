@@ -1,307 +1,615 @@
-const { goals: { GoalNear, GoalBlock } } = require('mineflayer-pathfinder');
+const { goals: { GoalNear } } = require('mineflayer-pathfinder');
 const vec3 = require('vec3');
 const Movements = require('mineflayer-pathfinder').Movements;
 
-// 移动到指定位置
-async function moveToPosition(bot, x, y, z) {
-    const position = vec3(x, y, z);
-    
-    // 在这里初始化 Movements
-    const mcData = require('minecraft-data')(bot.version);
-    const movements = new Movements(bot, mcData);
-    movements.canDig = true;
-    movements.allow1by1towers = true;
-    movements.allowFreeMotion = true;
-    
-    // 设置机器人的movements
-    bot.pathfinder.setMovements(movements);
-    
-    // 计算目标位置的距离
-    const currentPosition = bot.entity.position;
-    const distance = currentPosition.distanceTo(position);
-    
-    // 设置超时时间，根据距离动态调整
-    // 每格方块大约需要0.5秒，再加上10秒的基础时间
-    const timeoutMs = Math.max(20000, distance * 500 + 10000);
-    
-    console.log(`移动到 (${x}, ${y}, ${z})，距离: ${distance.toFixed(2)}，超时: ${timeoutMs/1000}秒`);
-    
-    try {
-        // 创建一个超时Promise
-        const timeout = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('移动超时')), timeoutMs);
-        });
-        
-        // 创建移动Promise
-        const movement = new Promise(async (resolve) => {
-            // 设置寻路目标
-            const goal = new GoalNear(x, y, z, 1);
-            await bot.pathfinder.goto(goal);
-            resolve();
-        });
-        
-        // 使用Promise.race来实现超时
-        await Promise.race([movement, timeout]);
-        
-        return {
-            success: true,
-            message: `已移动到 (${x}, ${y}, ${z})附近`,
-            position: bot.entity.position
-        };
-    } catch (err) {
-        console.error('移动失败:', err.message);
-        return {
-            success: false,
-            error: err.message,
-            position: bot.entity.position
-        };
-    }
+// 缓存 mcData 和 movements 以避免每次调用都重新创建
+let _cachedMcData = null;
+let _cachedMovements = null;
+let _cachedBotVersion = null;
+
+function getMcData(bot) {
+    if (_cachedMcData && _cachedBotVersion === bot.version) return _cachedMcData;
+    _cachedMcData = require('minecraft-data')(bot.version);
+    _cachedBotVersion = bot.version;
+    _cachedMovements = null; // 版本变了要重建 movements
+    return _cachedMcData;
 }
 
-// 添加检查插件是否加载的函数
+function getMovements(bot) {
+    const mcData = getMcData(bot);
+    if (_cachedMovements) return _cachedMovements;
+    _cachedMovements = new Movements(bot, mcData);
+    _cachedMovements.canDig = true;
+    _cachedMovements.allow1by1towers = true;
+    _cachedMovements.allowFreeMotion = true;
+    return _cachedMovements;
+}
+
+/**
+ * 确保 pathfinder 和 collectBlock 插件已加载
+ */
 function ensurePluginsLoaded(bot) {
-    // 检查pathfinder插件
     if (!bot.pathfinder) {
-        throw new Error('pathfinder插件未加载');
+        throw new Error('pathfinder 插件未加载');
     }
-    
-    // 检查collectBlock插件
     if (!bot.collectBlock) {
-        // 尝试加载插件
         try {
             const collectBlock = require('mineflayer-collectblock').plugin;
             bot.loadPlugin(collectBlock);
-            console.log('动态加载了collectBlock插件');
         } catch (e) {
-            throw new Error('collectBlock插件未加载且无法动态加载: ' + e.message);
+            throw new Error('collectBlock 插件未加载: ' + e.message);
         }
     }
 }
 
-// 修改收集方法
-async function collect(bot, action) {
-    // 首先检查插件是否加载
-    ensurePluginsLoaded(bot);
-    
-    const blockName = action.blockType;
-    if (!blockName) {
-        throw new Error('未指定要收集的方块类型');
-    }
-    
-    const mcData = require('minecraft-data')(bot.version);
-    const blockType = mcData.blocksByName[blockName];
-    
-    if (!blockType) {
-        throw new Error(`未知的方块类型: ${blockName}`);
-    }
-    
-    console.log(`搜索附近的 ${blockName}...`);
-    
-    // 查找范围
-    const searchRadius = action.radius || 32;
-    
-    // 尝试查找指定方块
-    const blockPosition = bot.findBlock({
-        matching: blockType.id,
-        maxDistance: searchRadius
-    });
-    
-    if (!blockPosition) {
-        return {
-            success: false,
-            error: `找不到附近的 ${blockName}`
-        };
-    }
-    
-    console.log(`找到 ${blockName} 位于 ${blockPosition.position.toString()}`);
-    
+/**
+ * 移动到指定坐标
+ */
+async function moveToPosition(bot, x, y, z) {
+    const position = vec3(x, y, z);
+    const movements = getMovements(bot);
+    bot.pathfinder.setMovements(movements);
+
+    const currentPosition = bot.entity.position;
+    const distance = currentPosition.distanceTo(position);
+    const timeoutMs = Math.max(20000, distance * 500 + 10000);
+
+    console.log(`[moveTo] (${x}, ${y}, ${z}), 距离: ${distance.toFixed(2)}, 超时: ${timeoutMs / 1000}s`);
+
     try {
-        // 确保collectBlock可用
-        if (!bot.collectBlock || typeof bot.collectBlock.collect !== 'function') {
-            throw new Error('collectBlock插件未正确初始化');
-        }
-        
-        // 收集方块
-        await bot.collectBlock.collect(blockPosition);
-        console.log(`成功收集了 ${blockName}`);
-        
+        const timeout = new Promise((_, reject) =>
+            setTimeout(() => reject(new Error('移动超时')), timeoutMs)
+        );
+        const movement = (async () => {
+            const goal = new GoalNear(x, y, z, 1);
+            await bot.pathfinder.goto(goal);
+        })();
+
+        await Promise.race([movement, timeout]);
         return {
             success: true,
-            message: `成功收集了 ${blockName}`
+            message: `已移动到 (${x}, ${y}, ${z}) 附近`,
+            position: bot.entity.position,
         };
-    } catch (e) {
-        console.error(`收集 ${blockName} 失败:`, e);
-        return {
-            success: false,
-            error: `收集失败: ${e.message}`
-        };
+    } catch (err) {
+        return { success: false, error: err.message, position: bot.entity.position };
     }
 }
 
-// 放置方块
-async function placeBlock(bot, itemName, x, y, z) {
-    const position = vec3(x, y, z);
-    
-    // 先移动到附近
-    await moveToPosition(bot, x, y, z);
-    
-    // 找到要放置的方块
-    const mcData = require('minecraft-data')(bot.version);
-    const item = mcData.itemsByName[itemName];
-    
-    if (!item) {
-        throw new Error(`未知物品: ${itemName}`);
-    }
-    
-    // 检查物品栏
-    const itemInInventory = bot.inventory.findInventoryItem(item.id);
-    if (!itemInInventory) {
-        throw new Error(`物品栏中没有 ${itemName}`);
-    }
-    
-    // 找到可以放置方块的位置
-    const block = bot.blockAt(position);
-    const referenceBlock = bot.blockAt(position.offset(0, -1, 0));
-    
-    if (!block || !referenceBlock) {
-        throw new Error('无法找到放置位置');
-    }
-    
-    // 装备物品
-    await bot.equip(itemInInventory, 'hand');
-    
-    // 放置方块
-    await bot.placeBlock(referenceBlock, vec3(0, 1, 0));
-}
+/**
+ * 收集指定方块
+ */
+async function collect(bot, action) {
+    ensurePluginsLoaded(bot);
 
-// 挖掘方块
-async function digBlock(bot, x, y, z) {
-    const position = vec3(x, y, z);
-    const block = bot.blockAt(position);
-    
-    if (!block || block.name === 'air') {
-        throw new Error('该位置没有方块');
+    const blockName = action.blockType;
+    if (!blockName) {
+        return { success: false, error: '未指定 blockType' };
     }
-    
-    // 移动到方块附近
-    await moveToPosition(bot, x, y, z);
-    
-    // 选择合适的工具
-    await bot.tool.equipForBlock(block);
-    
-    // 挖掘方块
-    await bot.dig(block);
-}
 
-// 攻击实体
-async function attackEntity(bot, entityName) {
-    // 寻找最近的目标实体
-    const entity = Object.values(bot.entities).find(e => 
-        (e.name === entityName || e.username === entityName || e.displayName === entityName) && 
-        e.position.distanceTo(bot.entity.position) < 32
-    );
-    
-    if (!entity) {
-        throw new Error(`找不到实体: ${entityName}`);
+    const mcData = getMcData(bot);
+    const blockType = mcData.blocksByName[blockName];
+    if (!blockType) {
+        return { success: false, error: `未知方块类型: ${blockName}` };
     }
-    
-    // 移动到实体附近
-    const goal = new GoalNear(entity.position.x, entity.position.y, entity.position.z, 2);
-    bot.pathfinder.setGoal(goal);
-    
-    // 等待接近
-    await new Promise((resolve) => {
-        const interval = setInterval(() => {
-            if (bot.entity.position.distanceTo(entity.position) < 3) {
-                clearInterval(interval);
-                bot.pathfinder.setGoal(null);
-                resolve();
+
+    const searchRadius = action.radius || 32;
+    const count = action.count || 1;
+    let collected = 0;
+
+    console.log(`[collect] ${blockName}, 半径=${searchRadius}, 数量=${count}`);
+
+    try {
+        for (let i = 0; i < count; i++) {
+            const block = bot.findBlock({
+                matching: blockType.id,
+                maxDistance: searchRadius,
+            });
+            if (!block) {
+                if (collected > 0) {
+                    return { success: true, message: `收集了 ${collected}/${count} 个 ${blockName} (附近已无更多)` };
+                }
+                return { success: false, error: `找不到附近的 ${blockName}` };
             }
-        }, 1000); // Reduced interval for faster check
-    });
-    
-    // 攻击实体
-    bot.lookAt(entity.position.offset(0, entity.height, 0));
-    bot.attack(entity);
+
+            await bot.collectBlock.collect(block);
+            collected++;
+        }
+
+        return { success: true, message: `成功收集了 ${collected} 个 ${blockName}` };
+    } catch (e) {
+        return { success: false, error: `收集失败: ${e.message}`, collected };
+    }
 }
 
-// --- 新增复合动作：跳跃攻击 ---
-async function jumpAttack(bot, targetIdOrName) {
-    console.log(`尝试跳跃攻击目标: ${targetIdOrName}`);
-    // 查找目标实体 (通过ID或名称)
-    const targetEntity = findEntityByIdOrName(bot, targetIdOrName);
+/**
+ * 放置方块
+ */
+async function placeBlock(bot, itemName, x, y, z) {
+    try {
+        // 移动到目标位置旁边 (而非目标位置本身, 否则机器人会挡住放置)
+        await moveToPosition(bot, x + 1, y, z);
 
-    if (!targetEntity) {
-        console.warn(`跳跃攻击失败: 找不到目标 ${targetIdOrName}`);
-        return { success: false, error: `找不到目标实体: ${targetIdOrName}` };
+        const mcData = getMcData(bot);
+        const item = mcData.itemsByName[itemName];
+        if (!item) {
+            return { success: false, error: `未知物品: ${itemName}` };
+        }
+
+        const itemInInventory = bot.inventory.findInventoryItem(item.id);
+        if (!itemInInventory) {
+            return { success: false, error: `物品栏中没有 ${itemName}` };
+        }
+
+        const position = vec3(x, y, z);
+        const referenceBlock = bot.blockAt(position.offset(0, -1, 0));
+        if (!referenceBlock) {
+            return { success: false, error: '无法找到放置参考方块' };
+        }
+
+        await bot.equip(itemInInventory, 'hand');
+        await bot.placeBlock(referenceBlock, vec3(0, 1, 0));
+
+        return { success: true, message: `已在 (${x}, ${y}, ${z}) 放置 ${itemName}` };
+    } catch (e) {
+        return { success: false, error: `放置失败: ${e.message}` };
+    }
+}
+
+/**
+ * 挖掘方块
+ */
+async function digBlock(bot, x, y, z) {
+    try {
+        const position = vec3(x, y, z);
+        const block = bot.blockAt(position);
+        if (!block || block.name === 'air') {
+            return { success: false, error: '该位置没有方块' };
+        }
+
+        await moveToPosition(bot, x, y, z);
+        await bot.tool.equipForBlock(block);
+        await bot.dig(block);
+
+        return { success: true, message: `已挖掘 (${x}, ${y}, ${z}) 的 ${block.name}` };
+    } catch (e) {
+        return { success: false, error: `挖掘失败: ${e.message}` };
+    }
+}
+
+/**
+ * 通过 ID 或名称查找实体
+ */
+function findEntityByIdOrName(bot, idOrName) {
+    return Object.values(bot.entities).find(
+        (e) =>
+            e.id == idOrName ||
+            e.username === idOrName ||
+            e.name === idOrName ||
+            e.displayName === idOrName
+    );
+}
+
+/**
+ * 攻击实体
+ */
+async function attackEntity(bot, target) {
+    const entity = findEntityByIdOrName(bot, target);
+    if (!entity) {
+        return { success: false, error: `找不到实体: ${target}` };
     }
 
-    const distance = bot.entity.position.distanceTo(targetEntity.position);
-    console.log(`目标距离: ${distance.toFixed(2)}`);
-
-    // 检查距离是否合适
-    if (distance > 5) { // 如果太远，先移动过去
-        console.log("目标太远，先移动靠近...");
-        try {
-            const goal = new GoalNear(targetEntity.position.x, targetEntity.position.y, targetEntity.position.z, 2);
+    try {
+        const distance = bot.entity.position.distanceTo(entity.position);
+        if (distance > 4) {
+            const goal = new GoalNear(entity.position.x, entity.position.y, entity.position.z, 2);
             await bot.pathfinder.goto(goal);
-            console.log("已移动到目标附近。");
-        } catch (moveError) {
-            console.error(`移动到目标 ${targetIdOrName} 失败:`, moveError);
-            return { success: false, error: `移动到目标失败: ${moveError.message}` };
+        }
+
+        await bot.lookAt(entity.position.offset(0, entity.height, 0));
+        await bot.attack(entity);
+
+        return { success: true, message: `已攻击 ${target}` };
+    } catch (e) {
+        return { success: false, error: `攻击失败: ${e.message}` };
+    }
+}
+
+/**
+ * 跳跃攻击
+ */
+async function jumpAttack(bot, target) {
+    const entity = findEntityByIdOrName(bot, target);
+    if (!entity) {
+        return { success: false, error: `找不到目标实体: ${target}` };
+    }
+
+    try {
+        const distance = bot.entity.position.distanceTo(entity.position);
+        if (distance > 5) {
+            const goal = new GoalNear(entity.position.x, entity.position.y, entity.position.z, 2);
+            await bot.pathfinder.goto(goal);
+        }
+
+        await bot.lookAt(entity.position.offset(0, entity.height * 0.8, 0));
+        bot.setControlState('jump', true);
+        await bot.waitForTicks(2);
+        await bot.attack(entity);
+        await bot.waitForTicks(1);
+        bot.setControlState('jump', false);
+
+        return { success: true, message: `成功对 ${target} 执行了跳跃攻击` };
+    } catch (e) {
+        bot.setControlState('jump', false);
+        return { success: false, error: `跳跃攻击失败: ${e.message}` };
+    }
+}
+
+/**
+ * 看向指定坐标
+ */
+async function lookAt(bot, x, y, z) {
+    try {
+        const pos = vec3(x, y, z);
+        await bot.lookAt(pos);
+        return { success: true, message: `已看向 (${x}, ${y}, ${z})` };
+    } catch (e) {
+        return { success: false, error: `看向失败: ${e.message}` };
+    }
+}
+
+/**
+ * 吃食物
+ * @param {object} bot
+ * @param {string|null} itemName - 指定食物名, 为空则自动选择
+ */
+async function eat(bot, itemName) {
+    const mcData = getMcData(bot);
+    let foodItem = null;
+
+    if (itemName) {
+        const itemType = mcData.itemsByName[itemName];
+        if (!itemType) return { success: false, error: `未知物品: ${itemName}` };
+        foodItem = bot.inventory.findInventoryItem(itemType.id);
+        if (!foodItem) return { success: false, error: `物品栏中没有 ${itemName}` };
+    } else {
+        // 自动选择食物 (foodPoints > 0 的物品)
+        const foodNames = Object.values(mcData.foods || {}).map(f => f.name);
+        for (const item of bot.inventory.items()) {
+            if (foodNames.includes(item.name)) {
+                foodItem = item;
+                break;
+            }
+        }
+        // 备用: 按名称模糊查找常见食物
+        if (!foodItem) {
+            const commonFoods = ['cooked_beef', 'cooked_porkchop', 'bread', 'cooked_chicken',
+                'cooked_mutton', 'cooked_salmon', 'cooked_cod', 'baked_potato', 'golden_apple',
+                'apple', 'carrot', 'melon_slice', 'sweet_berries', 'cookie', 'cake'];
+            for (const name of commonFoods) {
+                const type = mcData.itemsByName[name];
+                if (type) {
+                    const found = bot.inventory.findInventoryItem(type.id);
+                    if (found) { foodItem = found; break; }
+                }
+            }
+        }
+        if (!foodItem) return { success: false, error: '物品栏中没有可食用的食物' };
+    }
+
+    try {
+        await bot.equip(foodItem, 'hand');
+        bot.activateItem();
+        await bot.waitForTicks(30); // ~1.5 秒等待进食
+        bot.deactivateItem();
+        return { success: true, message: `已食用 ${foodItem.name}`, food: bot.food };
+    } catch (e) {
+        return { success: false, error: `进食失败: ${e.message}` };
+    }
+}
+
+/**
+ * 钓鱼
+ * @param {object} bot
+ * @param {number} duration - 最长等待 ticks (默认 600 = ~30秒)
+ */
+async function fish(bot, duration) {
+    const mcData = getMcData(bot);
+    const rodType = mcData.itemsByName['fishing_rod'];
+    if (!rodType) return { success: false, error: '版本不支持钓鱼' };
+
+    const rod = bot.inventory.findInventoryItem(rodType.id);
+    if (!rod) return { success: false, error: '物品栏中没有钓鱼竿' };
+
+    try {
+        await bot.equip(rod, 'hand');
+        bot.activateItem(); // 抛竿
+
+        const maxTicks = duration || 600;
+        const collected = await new Promise((resolve) => {
+            let done = false;
+            const onCollect = (collector, collected) => {
+                if (collector === bot.entity) {
+                    done = true;
+                    resolve({ caught: true, item: collected?.name || 'unknown' });
+                }
+            };
+            bot.on('playerCollect', onCollect);
+            // 超时
+            setTimeout(() => {
+                if (!done) {
+                    bot.removeListener('playerCollect', onCollect);
+                    resolve({ caught: false });
+                }
+            }, maxTicks * 50);
+        });
+
+        bot.activateItem(); // 收竿
+        if (collected.caught) {
+            return { success: true, message: `钓到了 ${collected.item}` };
+        }
+        return { success: true, message: '钓鱼超时, 未钓到东西' };
+    } catch (e) {
+        return { success: false, error: `钓鱼失败: ${e.message}` };
+    }
+}
+
+/**
+ * 熔炼物品
+ */
+async function smelt(bot, itemName, fuelName, count) {
+    const mcData = getMcData(bot);
+
+    // 1. 寻找熔炉
+    const furnaceBlock = bot.findBlock({
+        matching: mcData.blocksByName['furnace']?.id,
+        maxDistance: 32,
+    });
+    if (!furnaceBlock) return { success: false, error: '附近没有找到熔炉' };
+
+    // 2. 走到熔炉旁
+    const fb = furnaceBlock.position;
+    await moveToPosition(bot, fb.x, fb.y, fb.z);
+
+    // 3. 打开熔炉
+    try {
+        const furnace = await bot.openFurnace(furnaceBlock);
+
+        // 放入物品
+        const inputItem = mcData.itemsByName[itemName];
+        if (!inputItem) { furnace.close(); return { success: false, error: `未知物品: ${itemName}` }; }
+        const invItem = bot.inventory.findInventoryItem(inputItem.id);
+        if (!invItem) { furnace.close(); return { success: false, error: `物品栏中没有 ${itemName}` }; }
+
+        await furnace.putInput(invItem.type, null, count || 1);
+
+        // 放入燃料 (如果指定或熔炉没有燃料)
+        if (fuelName || !furnace.fuelItem()) {
+            const fname = fuelName || 'coal';
+            const fuelType = mcData.itemsByName[fname];
+            if (fuelType) {
+                const fuelInv = bot.inventory.findInventoryItem(fuelType.id);
+                if (fuelInv) {
+                    await furnace.putFuel(fuelInv.type, null, 1);
+                }
+            }
+        }
+
+        // 等待熔炼 (最多30秒)
+        await new Promise(r => setTimeout(r, 12000));
+
+        // 尝试取出
+        const output = furnace.outputItem();
+        if (output) {
+            await furnace.takeOutput();
+        }
+        furnace.close();
+
+        return { success: true, message: `已将 ${itemName} 放入熔炉熔炼` };
+    } catch (e) {
+        return { success: false, error: `熔炼失败: ${e.message}` };
+    }
+}
+
+/**
+ * 打开箱子并存入/取出物品
+ * @param {string} action - 'deposit' 或 'withdraw'
+ */
+async function openChest(bot, x, y, z, chestAction, itemName, count) {
+    const mcData = getMcData(bot);
+    const pos = vec3(x, y, z);
+
+    // 走到箱子旁
+    await moveToPosition(bot, x, y, z);
+
+    const block = bot.blockAt(pos);
+    if (!block) return { success: false, error: '该位置没有方块' };
+
+    try {
+        const chest = await bot.openContainer(block);
+
+        if (chestAction === 'deposit') {
+            const itemType = mcData.itemsByName[itemName];
+            if (!itemType) { chest.close(); return { success: false, error: `未知物品: ${itemName}` }; }
+            const invItem = bot.inventory.findInventoryItem(itemType.id);
+            if (!invItem) { chest.close(); return { success: false, error: `物品栏中没有 ${itemName}` }; }
+            await chest.deposit(invItem.type, null, count || invItem.count);
+            chest.close();
+            return { success: true, message: `已将 ${count || invItem.count} 个 ${itemName} 存入箱子` };
+        } else if (chestAction === 'withdraw') {
+            const itemType = mcData.itemsByName[itemName];
+            if (!itemType) { chest.close(); return { success: false, error: `未知物品: ${itemName}` }; }
+            await chest.withdraw(itemType.id, null, count || 1);
+            chest.close();
+            return { success: true, message: `已从箱子取出 ${count || 1} 个 ${itemName}` };
+        } else {
+            // 只是查看箱子内容
+            const items = chest.containerItems().map(i => ({ name: i.name, count: i.count }));
+            chest.close();
+            return { success: true, message: `箱子内容: ${JSON.stringify(items)}`, items };
+        }
+    } catch (e) {
+        return { success: false, error: `箱子操作失败: ${e.message}` };
+    }
+}
+
+/**
+ * 在床上睡觉
+ */
+async function sleep(bot) {
+    const mcData = getMcData(bot);
+
+    // 搜索附近的床 (所有颜色)
+    const bedNames = Object.keys(mcData.blocksByName).filter(n => n.endsWith('_bed'));
+    const bedIds = bedNames.map(n => mcData.blocksByName[n]?.id).filter(Boolean);
+
+    const bedBlock = bot.findBlock({
+        matching: bedIds,
+        maxDistance: 32,
+    });
+    if (!bedBlock) return { success: false, error: '附近没有找到床' };
+
+    // 走到床旁
+    const bp = bedBlock.position;
+    await moveToPosition(bot, bp.x, bp.y, bp.z);
+
+    try {
+        await bot.sleep(bedBlock);
+        // 等待一段时间 (等天亮或被打断)
+        await new Promise((resolve) => {
+            bot.once('wake', resolve);
+            setTimeout(resolve, 15000);
+        });
+        return { success: true, message: '已睡觉并醒来' };
+    } catch (e) {
+        return { success: false, error: `睡觉失败: ${e.message} (可能不是夜晚或附近有怪物)` };
+    }
+}
+
+/**
+ * 跟随玩家
+ */
+async function followPlayer(bot, playerName, distance) {
+    const { GoalFollow } = require('mineflayer-pathfinder').goals;
+
+    const target = bot.players[playerName];
+    if (!target || !target.entity) {
+        return { success: false, error: `找不到玩家: ${playerName}` };
+    }
+
+    const followDist = distance || 3;
+    const movements = getMovements(bot);
+    bot.pathfinder.setMovements(movements);
+
+    try {
+        const goal = new GoalFollow(target.entity, followDist);
+        bot.pathfinder.setGoal(goal, true); // dynamic=true 持续跟随
+
+        // 跟随一段时间 (20 秒)
+        await new Promise(r => setTimeout(r, 20000));
+        bot.pathfinder.setGoal(null); // 停止跟随
+        return { success: true, message: `已跟随 ${playerName} 一段时间` };
+    } catch (e) {
+        bot.pathfinder.setGoal(null);
+        return { success: false, error: `跟随失败: ${e.message}` };
+    }
+}
+
+/**
+ * 探索周围环境: 随机移动并收集发现信息
+ */
+async function explore(bot, radius) {
+    const exploreRadius = radius || 50;
+    const pos = bot.entity.position;
+
+    // 随机选择方向
+    const angle = Math.random() * 2 * Math.PI;
+    const dist = 10 + Math.random() * (exploreRadius - 10);
+    const targetX = Math.floor(pos.x + Math.cos(angle) * dist);
+    const targetZ = Math.floor(pos.z + Math.sin(angle) * dist);
+
+    // 先尝试获取目标 Y 坐标 (取当前高度)
+    const targetY = Math.floor(pos.y);
+
+    console.log(`[explore] 探索方向 (${targetX}, ${targetY}, ${targetZ}), 半径=${exploreRadius}`);
+
+    try {
+        await moveToPosition(bot, targetX, targetY, targetZ);
+    } catch (e) {
+        // 移动失败也没关系, 可能到了一半
+    }
+
+    // 扫描新位置附近的有趣方块
+    const mcData = getMcData(bot);
+    const interestingBlocks = [];
+    const interesting = new Set([
+        'diamond_ore', 'deepslate_diamond_ore', 'gold_ore', 'deepslate_gold_ore',
+        'iron_ore', 'deepslate_iron_ore', 'coal_ore', 'deepslate_coal_ore',
+        'lapis_ore', 'deepslate_lapis_ore', 'redstone_ore', 'deepslate_redstone_ore',
+        'emerald_ore', 'deepslate_emerald_ore', 'copper_ore', 'deepslate_copper_ore',
+        'chest', 'spawner', 'crafting_table', 'furnace', 'anvil',
+        'enchanting_table', 'brewing_stand', 'village_bell',
+    ]);
+
+    const scanRadius = 8;
+    const cp = bot.entity.position;
+    for (let dx = -scanRadius; dx <= scanRadius; dx++) {
+        for (let dy = -scanRadius; dy <= scanRadius; dy++) {
+            for (let dz = -scanRadius; dz <= scanRadius; dz++) {
+                try {
+                    const block = bot.blockAt(vec3(
+                        Math.floor(cp.x) + dx,
+                        Math.floor(cp.y) + dy,
+                        Math.floor(cp.z) + dz
+                    ));
+                    if (block && interesting.has(block.name)) {
+                        interestingBlocks.push({
+                            name: block.name,
+                            position: { x: block.position.x, y: block.position.y, z: block.position.z },
+                        });
+                    }
+                } catch { /* ignore */ }
+            }
         }
     }
 
-    // 执行跳跃攻击
-    try {
-        bot.lookAt(targetEntity.position.offset(0, targetEntity.height * 0.8, 0)); // 稍微向下看一点可能有助于命中
-        bot.setControlState('jump', true); // 开始跳跃
-        
-        // 等待一小段时间让跳跃生效
-        await bot.waitForTicks(2); // 2 ticks (约100ms) - 需要根据实际情况调整
-
-        // 执行攻击
-        bot.attack(targetEntity);
-        console.log(`对 ${targetIdOrName} (ID: ${targetEntity.id}) 执行了攻击`);
-
-        // 等待攻击动画完成或一小段时间
-        await bot.waitForTicks(1);
-
-        bot.setControlState('jump', false); // 结束跳跃
-        console.log(`完成对 ${targetIdOrName} 的跳跃攻击`);
-        return { success: true, message: `成功对 ${targetIdOrName} 执行了跳跃攻击` };
-
-    } catch (attackError) {
-        console.error(`跳跃攻击时发生错误:`, attackError);
-        bot.setControlState('jump', false); // 确保跳跃状态被重置
-        return { success: false, error: `跳跃攻击失败: ${attackError.message}` };
+    // 附近实体
+    const nearbyEntities = [];
+    for (const id in bot.entities) {
+        const e = bot.entities[id];
+        if (e === bot.entity) continue;
+        const d = bot.entity.position.distanceTo(e.position);
+        if (d <= 16) {
+            nearbyEntities.push({
+                name: e.name || e.username || 'unknown',
+                type: e.type,
+                distance: d.toFixed(1),
+            });
+        }
     }
+
+    return {
+        success: true,
+        message: `探索完成。发现 ${interestingBlocks.length} 个有价值方块, ${nearbyEntities.length} 个实体`,
+        position: { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z },
+        interestingBlocks: interestingBlocks.slice(0, 20),
+        nearbyEntities: nearbyEntities.slice(0, 10),
+    };
 }
 
-// 辅助函数：通过ID或名称查找实体
-function findEntityByIdOrName(bot, idOrName) {
-    return Object.values(bot.entities).find(e => 
-        e.id == idOrName || // 检查数字ID
-        e.username === idOrName || // 检查玩家名称
-        e.name === idOrName // 检查实体名称 (例如 'skeleton', 'zombie')
-        // 可以根据需要添加 displayName 等
-    );
-}
-// ---------------------------------
-
-// 看向指定位置
-async function lookAt(bot, x, y, z) {
-    const position = vec3(x, y, z);
-    await bot.lookAt(position);
-}
-
-// 确保所有函数正确导出
 module.exports = {
     moveToPosition,
-    collect,           // 确保这是正确名称
+    collect,
     placeBlock,
     digBlock,
     attackEntity,
-    jumpAttack,        // 导出新增函数
-    lookAt
-}; 
+    jumpAttack,
+    lookAt,
+    eat,
+    fish,
+    smelt,
+    openChest,
+    sleep,
+    followPlayer,
+    explore,
+};
