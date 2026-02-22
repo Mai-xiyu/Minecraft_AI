@@ -72,6 +72,12 @@ class CacheSystem:
         if len(self.cache) % 20 == 0:
             self.save()
 
+    def delete(self, key: str):
+        """删除指定缓存条目 (如果存在)"""
+        if key in self.cache:
+            del self.cache[key]
+            logger.debug("缓存条目已删除: %s...", key[:40])
+
     # ── LRU 淘汰 ─────────────────────────────────────────
 
     def _evict(self):

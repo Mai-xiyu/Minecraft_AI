@@ -1,0 +1,41 @@
+{
+  "name": "prismarine-registry",
+  "version": "1.11.0",
+  "description": "Prismarine Registry",
+  "main": "lib/index.js",
+  "scripts": {
+    "test": "mocha --reporter spec --bail --exit",
+    "pretest": "npm run lint",
+    "lint": "standard",
+    "fix": "standard --fix"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/PrismarineJS/prismarine-registry.git"
+  },
+  "keywords": [
+    "prismarine",
+    "template"
+  ],
+  "author": "Romain Beaumont",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/PrismarineJS/prismarine-registry/issues"
+  },
+  "homepage": "https://github.com/PrismarineJS/prismarine-registry#readme",
+  "devDependencies": {
+    "bedrock-protocol": "^3.22.0",
+    "debug": "^4.3.3",
+    "minecraft-bedrock-server": "^1.1.2",
+    "minecraft-protocol": "^1.30.0",
+    "minecraft-wrap": "^1.4.0",
+    "mocha": "^11.0.1",
+    "prismarine-registry": "file:.",
+    "standard": "^17.0.0"
+  },
+  "dependencies": {
+    "minecraft-data": "^3.70.0",
+    "prismarine-block": "^1.17.1",
+    "prismarine-nbt": "^2.0.0"
+  }
+}

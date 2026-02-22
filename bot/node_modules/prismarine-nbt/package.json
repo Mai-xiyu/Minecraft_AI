@@ -1,0 +1,39 @@
+{
+  "name": "prismarine-nbt",
+  "version": "2.7.0",
+  "description": "A parser and serializer for NBT archives",
+  "keywords": [
+    "nbt",
+    "minecraft"
+  ],
+  "homepage": "https://github.com/prismarinejs/prismarine-nbt",
+  "author": "roblabla <robinlambertz+dev@gmail.com>",
+  "maintainers": [
+    "roblabla <robinlambertz+dev@gmail.com",
+    "Will Franzen <wtfranzen@gmail.com> (http://will.xyz/)",
+    "Dennis Bartlett <bartlett.dc.1@gmail.com>",
+    "Romain Beaumont <romain.rom1@gmail.com>"
+  ],
+  "main": "nbt",
+  "types": "./typings/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/prismarinejs/prismarine-nbt.git"
+  },
+  "devDependencies": {
+    "@types/node": "^22.8.0",
+    "chai": "^4.2.0",
+    "mocha": "^10.0.0",
+    "standard": "^17.0.0"
+  },
+  "scripts": {
+    "test": "mocha --reporter spec",
+    "pretest": "npm run lint",
+    "lint": "standard",
+    "fix": "standard --fix"
+  },
+  "dependencies": {
+    "protodef": "^1.18.0"
+  },
+  "license": "MIT"
+}
