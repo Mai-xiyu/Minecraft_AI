@@ -1,0 +1,37 @@
+{
+  "name": "prismarine-windows",
+  "version": "2.9.0",
+  "description": "Represent minecraft windows",
+  "main": "index.js",
+  "scripts": {
+    "mocha_test": "mocha --reporter spec --exit",
+    "test": "npm run mocha_test",
+    "pretest": "npm run lint",
+    "lint": "standard",
+    "fix": "standard --fix"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+ssh://git@github.com/PrismarineJS/prismarine-windows.git"
+  },
+  "dependencies": {
+    "prismarine-item": "^1.12.2",
+    "prismarine-registry": "^1.7.0",
+    "typed-emitter": "^2.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.2.1",
+    "standard": "^17.0.0",
+    "mocha": "^10.0.0"
+  },
+  "keywords": [
+    "minecraft",
+    "windows"
+  ],
+  "author": "Romain Beaumont <romain.rom1@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/PrismarineJS/prismarine-windows/issues"
+  },
+  "homepage": "https://github.com/PrismarineJS/prismarine-windows#readme"
+}

@@ -218,6 +218,23 @@ async function executeAction(bot, action) {
             actionPromise = actions.explore(bot, action.radius || 50);
             break;
 
+        // ── 知识查询动作 (不消耗游戏操作) ──
+        case 'queryRecipe':
+            actionPromise = actions.queryRecipe(bot, action.itemName);
+            break;
+
+        case 'queryBlockInfo':
+            actionPromise = actions.queryBlockInfo(bot, action.blockName || action.itemName);
+            break;
+
+        case 'searchBlocks':
+            actionPromise = actions.searchBlocks(bot, action.blockName, action.maxDistance || 64);
+            break;
+
+        case 'queryItemInfo':
+            actionPromise = actions.queryItemInfo(bot, action.itemName);
+            break;
+
         default:
             throw new Error(`未知的动作类型: ${actionType}`);
     }
@@ -272,33 +289,67 @@ function updateBotState(bot) {
             }
         }
 
-        // 附近方块 (3 格内, 最多 20 个)
+        // 附近方块 (8 格内, 按类型汇总前 30 个)
         botState.nearbyBlocks = [];
         try {
-            const radius = 3;
+            const radius = 8;
             const pp = bot.entity.position;
+            const blockMap = new Map(); // name -> {name, positions[], minDist}
             for (let x = Math.floor(pp.x) - radius; x <= Math.floor(pp.x) + radius; x++) {
                 for (let y = Math.floor(pp.y) - radius; y <= Math.floor(pp.y) + radius; y++) {
                     for (let z = Math.floor(pp.z) - radius; z <= Math.floor(pp.z) + radius; z++) {
                         try {
                             const pos = new Vec3(x, y, z);
                             const block = bot.blockAt(pos);
-                            if (block && block.name !== 'air') {
-                                botState.nearbyBlocks.push({
-                                    name: block.name,
-                                    position: { x, y, z },
-                                    distance: bot.entity.position.distanceTo(pos),
-                                });
+                            if (block && block.name !== 'air' && block.name !== 'cave_air') {
+                                const dist = bot.entity.position.distanceTo(pos);
+                                if (!blockMap.has(block.name)) {
+                                    blockMap.set(block.name, { name: block.name, position: { x, y, z }, distance: dist, count: 1 });
+                                } else {
+                                    const entry = blockMap.get(block.name);
+                                    entry.count++;
+                                    if (dist < entry.distance) {
+                                        entry.distance = dist;
+                                        entry.position = { x, y, z };
+                                    }
+                                }
                             }
                         } catch { /* 忽略单个方块错误 */ }
                     }
                 }
             }
-            botState.nearbyBlocks.sort((a, b) => a.distance - b.distance);
-            botState.nearbyBlocks = botState.nearbyBlocks.slice(0, 20);
+            botState.nearbyBlocks = Array.from(blockMap.values())
+                .sort((a, b) => a.distance - b.distance)
+                .slice(0, 30);
         } catch (e) {
             console.error('扫描方块出错:', e.message);
         }
+
+        // 当前可合成物品列表
+        botState.craftableItems = [];
+        try {
+            const mcData = require('minecraft-data')(bot.version);
+            const commonItems = [
+                'crafting_table', 'furnace', 'chest', 'stick',
+                'oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks',
+                'wooden_pickaxe', 'wooden_axe', 'wooden_shovel', 'wooden_sword',
+                'stone_pickaxe', 'stone_axe', 'stone_shovel', 'stone_sword',
+                'iron_pickaxe', 'iron_axe', 'iron_shovel', 'iron_sword',
+                'diamond_pickaxe', 'diamond_axe', 'diamond_shovel', 'diamond_sword',
+                'torch', 'ladder', 'bucket', 'iron_helmet', 'iron_chestplate',
+                'iron_leggings', 'iron_boots', 'shield', 'bow', 'arrow',
+                'bread', 'cake', 'sugar', 'paper', 'book', 'bookshelf',
+                'anvil', 'enchanting_table', 'brewing_stand',
+            ];
+            for (const name of commonItems) {
+                const item = mcData.itemsByName[name];
+                if (!item) continue;
+                const recipes = bot.recipesFor(item.id, null, null, null);
+                if (recipes.length > 0) {
+                    botState.craftableItems.push(name);
+                }
+            }
+        } catch { /* ignore */ }
 
         if (!botState.recentChats) botState.recentChats = [];
     } catch (err) {

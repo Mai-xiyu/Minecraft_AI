@@ -612,4 +612,283 @@ module.exports = {
     sleep,
     followPlayer,
     explore,
+    queryRecipe,
+    queryBlockInfo,
+    searchBlocks,
+    queryItemInfo,
 };
+
+// ── 知识查询动作 (不消耗游戏操作, 只返回信息) ──────────
+
+/**
+ * 查询物品合成配方
+ * @param {object} bot
+ * @param {string} itemName - 物品名称
+ * @returns {Promise<{success: boolean, message: string}>}
+ */
+async function queryRecipe(bot, itemName) {
+    const mcData = getMcData(bot);
+    const item = mcData.itemsByName[itemName];
+    if (!item) {
+        return { success: false, error: `未知物品: ${itemName}` };
+    }
+
+    // 获取所有配方 (不管物品栏有没有材料)
+    const allRecipes = bot.recipesAll(item.id, null, null);
+    // 获取当前可用配方 (物品栏满足)
+    const availableRecipes = bot.recipesFor(item.id, null, null, null);
+    // 需要工作台的配方
+    const tableRecipes = bot.recipesAll(item.id, null, true);
+
+    if (allRecipes.length === 0 && tableRecipes.length === 0) {
+        // 尝试从 mcData.recipes 查找
+        const rawRecipes = mcData.recipes?.[item.id] || [];
+        if (rawRecipes.length === 0) {
+            return { success: true, message: `${itemName} 没有合成配方 (可能需要通过挖掘、交易或熔炼获取)` };
+        }
+    }
+
+    const lines = [`## ${itemName} 的合成配方\n`];
+
+    // 解析配方详情
+    const recipes = [...allRecipes, ...tableRecipes];
+    const seen = new Set();
+    for (const recipe of recipes) {
+        const key = JSON.stringify(recipe.ingredients || recipe.inShape || recipe.delta);
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const needsTable = recipe.requiresTable ? '需要工作台' : '手工合成';
+        lines.push(`### 配方 (${needsTable})`);
+
+        // 获取原料
+        if (recipe.delta) {
+            const inputs = recipe.delta.filter(d => d.count < 0);
+            const outputs = recipe.delta.filter(d => d.count > 0);
+            if (inputs.length > 0) {
+                lines.push('所需材料:');
+                for (const inp of inputs) {
+                    const inItem = mcData.items[inp.id];
+                    const name = inItem ? inItem.name : `id:${inp.id}`;
+                    lines.push(`  - ${name} x${Math.abs(inp.count)}`);
+                }
+            }
+            if (outputs.length > 0) {
+                for (const out of outputs) {
+                    const outItem = mcData.items[out.id];
+                    const name = outItem ? outItem.name : `id:${out.id}`;
+                    lines.push(`产出: ${name} x${out.count}`);
+                }
+            }
+        }
+    }
+
+    // 当前物品栏可合成情况
+    if (availableRecipes.length > 0) {
+        lines.push(`\n✅ 当前物品栏可以直接合成 ${itemName}`);
+    } else {
+        lines.push(`\n❌ 当前物品栏材料不足以合成 ${itemName}`);
+
+        // 列出缺少的材料
+        if (recipes.length > 0 && recipes[0].delta) {
+            const inputs = recipes[0].delta.filter(d => d.count < 0);
+            lines.push('缺少的材料:');
+            for (const inp of inputs) {
+                const inItem = mcData.items[inp.id];
+                const name = inItem ? inItem.name : `id:${inp.id}`;
+                const needed = Math.abs(inp.count);
+                // 检查物品栏有多少
+                const invCount = bot.inventory.items()
+                    .filter(i => i.type === inp.id)
+                    .reduce((sum, i) => sum + i.count, 0);
+                if (invCount < needed) {
+                    lines.push(`  - ${name}: 需要 ${needed}, 拥有 ${invCount}, 还缺 ${needed - invCount}`);
+                }
+            }
+        }
+    }
+
+    return { success: true, message: lines.join('\n') };
+}
+
+/**
+ * 查询方块信息 (硬度、工具、掉落物)
+ * @param {object} bot
+ * @param {string} blockName
+ */
+async function queryBlockInfo(bot, blockName) {
+    const mcData = getMcData(bot);
+    const block = mcData.blocksByName[blockName];
+    if (!block) {
+        return { success: false, error: `未知方块: ${blockName}` };
+    }
+
+    const lines = [`## ${blockName} 方块信息\n`];
+    lines.push(`- ID: ${block.id}`);
+    lines.push(`- 硬度: ${block.hardness ?? '不可破坏'}`);
+    lines.push(`- 爆炸抗性: ${block.resistance ?? '未知'}`);
+    lines.push(`- 是否透明: ${block.transparent ? '是' : '否'}`);
+
+    // 需要的工具
+    if (block.material) {
+        lines.push(`- 材质类型: ${block.material}`);
+    }
+    if (block.harvestTools) {
+        const tools = Object.keys(block.harvestTools).map(id => {
+            const tool = mcData.items[parseInt(id)];
+            return tool ? tool.name : `id:${id}`;
+        });
+        lines.push(`- 需要工具: ${tools.join(', ')}`);
+    } else if (block.hardness !== null && block.hardness >= 0) {
+        lines.push(`- 需要工具: 任何工具/徒手`);
+    }
+
+    // 掉落物
+    try {
+        const loot = mcData.blockLoot?.[blockName];
+        if (loot && loot.drops) {
+            lines.push(`\n### 掉落物:`);
+            for (const drop of loot.drops) {
+                const dropItem = mcData.items[drop.id] || mcData.items[drop.item];
+                const name = dropItem ? dropItem.name : (drop.name || '未知');
+                lines.push(`  - ${name}`);
+            }
+        }
+    } catch { /* blockLoot may not exist */ }
+
+    // 附近搜索
+    const found = bot.findBlock({
+        matching: block.id,
+        maxDistance: 64,
+    });
+    if (found) {
+        const dist = bot.entity.position.distanceTo(found.position).toFixed(1);
+        lines.push(`\n📍 最近的 ${blockName} 在 (${found.position.x}, ${found.position.y}, ${found.position.z}), 距离 ${dist} 格`);
+    } else {
+        lines.push(`\n📍 64 格内未找到 ${blockName}`);
+    }
+
+    return { success: true, message: lines.join('\n') };
+}
+
+/**
+ * 大范围搜索方块
+ * @param {object} bot
+ * @param {string} blockName
+ * @param {number} maxDistance - 搜索半径 (默认64)
+ */
+async function searchBlocks(bot, blockName, maxDistance) {
+    const mcData = getMcData(bot);
+    const block = mcData.blocksByName[blockName];
+    if (!block) {
+        return { success: false, error: `未知方块: ${blockName}` };
+    }
+
+    const radius = maxDistance || 64;
+    const positions = bot.findBlocks({
+        matching: block.id,
+        maxDistance: radius,
+        count: 10,
+    });
+
+    if (!positions || positions.length === 0) {
+        return { success: true, message: `在 ${radius} 格范围内未找到 ${blockName}` };
+    }
+
+    const lines = [`## 搜索结果: ${blockName} (${radius}格范围内)\n`];
+    lines.push(`找到 ${positions.length} 个:\n`);
+
+    for (const pos of positions.slice(0, 8)) {
+        const dist = bot.entity.position.distanceTo(pos).toFixed(1);
+        lines.push(`- (${pos.x}, ${pos.y}, ${pos.z}) 距离: ${dist}格`);
+    }
+
+    // 推荐最近的
+    if (positions.length > 0) {
+        const nearest = positions[0];
+        lines.push(`\n💡 最近的在 (${nearest.x}, ${nearest.y}, ${nearest.z})`);
+        lines.push(`建议: 使用 moveTo 前往或 collect 直接采集`);
+    }
+
+    return { success: true, message: lines.join('\n') };
+}
+
+/**
+ * 查询物品信息 (可合成、可食用、获取途径)
+ * @param {object} bot
+ * @param {string} itemName
+ */
+async function queryItemInfo(bot, itemName) {
+    const mcData = getMcData(bot);
+    const item = mcData.itemsByName[itemName];
+    if (!item) {
+        return { success: false, error: `未知物品: ${itemName}` };
+    }
+
+    const lines = [`## ${itemName} 物品信息\n`];
+    lines.push(`- ID: ${item.id}`);
+    lines.push(`- 最大堆叠: ${item.stackSize}`);
+
+    // 是否食物
+    const food = Object.values(mcData.foods || {}).find(f => f.id === item.id || f.name === itemName);
+    if (food) {
+        lines.push(`- 🍖 可食用: 恢复 ${food.foodPoints || '?'} 饥饿值, ${food.saturation || '?'} 饱和度`);
+    }
+
+    // 物品栏中有多少
+    const invCount = bot.inventory.items()
+        .filter(i => i.type === item.id)
+        .reduce((sum, i) => sum + i.count, 0);
+    lines.push(`- 物品栏中拥有: ${invCount}`);
+
+    // 合成配方
+    const recipes = bot.recipesAll(item.id, null, null);
+    const tableRecipes = bot.recipesAll(item.id, null, true);
+    if (recipes.length > 0 || tableRecipes.length > 0) {
+        lines.push(`- ✅ 可合成 (共 ${recipes.length + tableRecipes.length} 个配方)`);
+        lines.push(`  使用 queryRecipe 查看详细配方`);
+    } else {
+        lines.push(`- ❌ 不可合成`);
+    }
+
+    // 获取途径提示
+    lines.push(`\n### 获取途径:`);
+
+    // 检查是否有对应方块可挖掘
+    const blockEquiv = mcData.blocksByName[itemName];
+    if (blockEquiv) {
+        lines.push(`- 挖掘 ${itemName} 方块`);
+        const found = bot.findBlock({ matching: blockEquiv.id, maxDistance: 64 });
+        if (found) {
+            lines.push(`  (最近在 ${found.position.x}, ${found.position.y}, ${found.position.z})`);
+        }
+    }
+
+    // 熔炼来源 (常见的映射)
+    const smeltSources = {
+        'iron_ingot': 'raw_iron 或 iron_ore',
+        'gold_ingot': 'raw_gold 或 gold_ore',
+        'copper_ingot': 'raw_copper 或 copper_ore',
+        'glass': 'sand',
+        'stone': 'cobblestone',
+        'smooth_stone': 'stone',
+        'brick': 'clay_ball',
+        'charcoal': 'oak_log (任意原木)',
+        'cooked_beef': 'beef',
+        'cooked_porkchop': 'porkchop',
+        'cooked_chicken': 'chicken',
+        'cooked_mutton': 'mutton',
+        'cooked_salmon': 'salmon',
+        'cooked_cod': 'cod',
+        'baked_potato': 'potato',
+    };
+    if (smeltSources[itemName]) {
+        lines.push(`- 熔炼: ${smeltSources[itemName]}`);
+    }
+
+    if (recipes.length > 0 || tableRecipes.length > 0) {
+        lines.push(`- 合成: 使用 queryRecipe 查看详情`);
+    }
+
+    return { success: true, message: lines.join('\n') };
+}
